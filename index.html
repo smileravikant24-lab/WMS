@@ -447,14 +447,59 @@
             };
 
             // ── Memos ────────────────────────────────────────────────────────────
+            const [dashSearch, setDashSearch] = useState('');
+
+            // Helper for case-insensitive and normalized whitespace comparison
+            const norm = (s) => (s || '').toString().toLowerCase().replace(/\s+/g, ' ').trim();
+            const ciEquals = (a, b) => norm(a) === norm(b);
+            const millMatches = (m1, m2) => {
+                const s1 = norm(m1), s2 = norm(m2);
+                if (!s1 || !s2) return false;
+                return s1 === s2 || s1.includes(s2) || s2.includes(s1);
+            };
+
             const filteredItems = useMemo(() => {
                 if (!searchQuery) return [];
-                return masterItems.filter(item => item.label.toLowerCase().includes(searchQuery.toLowerCase())).slice(0, 8);
+                const q = norm(searchQuery);
+                return masterItems.filter(item => norm(item.label).includes(q) || norm(item.name).includes(q) || norm(item.mill).includes(q)).slice(0, 10);
             }, [searchQuery, masterItems]);
 
-            const tableData = useMemo(() => dashData.items.filter(item => item.warehouse === selectedWH), [selectedWH, dashData.items]);
+            const tableData = useMemo(() => {
+                let list = dashData.items.filter(item => ciEquals(item.warehouse, selectedWH));
+                if (dashSearch.trim()) {
+                    const q = norm(dashSearch);
+                    list = list.filter(item => norm(item.product).includes(q) || norm(item.mill).includes(q));
+                }
+                return list;
+            }, [selectedWH, dashData.items, dashSearch]);
 
-            const itemStats = useMemo(() => dashData.items.find(i => i.product === formData.product && i.warehouse === formData.warehouse && i.mill === formData.mill) || { qty: 0, avgGST: 0, avgNonGST: 0 }, [formData.product, formData.warehouse, formData.mill, dashData.items]);
+            const itemStats = useMemo(() => {
+                if (!formData.product || !formData.warehouse) return { qty: 0, avgGST: 0, avgNonGST: 0 };
+                // 1) Match warehouse + product + mill
+                const match1 = dashData.items.find(i => 
+                    ciEquals(i.warehouse, formData.warehouse) &&
+                    ciEquals(i.product, formData.product) &&
+                    millMatches(i.mill, formData.mill)
+                );
+                if (match1) return match1;
+
+                // 2) Match warehouse + product (in case mill name in MasterStock differs slightly e.g. Satia vs Satia Industries)
+                const match2 = dashData.items.find(i => 
+                    ciEquals(i.warehouse, formData.warehouse) &&
+                    ciEquals(i.product, formData.product)
+                );
+                if (match2) return match2;
+
+                return { qty: 0, avgGST: 0, avgNonGST: 0 };
+            }, [formData.product, formData.warehouse, formData.mill, dashData.items]);
+
+            // Track stock in other warehouses for this product
+            const otherWhStocks = useMemo(() => {
+                if (!formData.product) return [];
+                return dashData.items
+                    .filter(i => !ciEquals(i.warehouse, formData.warehouse) && ciEquals(i.product, formData.product) && (Number(i.qty) || 0) > 0)
+                    .map(i => `${i.warehouse}: ${n2(i.qty)}`);
+            }, [formData.product, formData.warehouse, dashData.items]);
 
             // Price Freeze indicator: stock 0 hai lekin last rate saved hai (frozen)
             const isFrozenRate = useMemo(() => (Number(itemStats.qty) || 0) === 0 && ((Number(itemStats.avgGST) || 0) > 0 || (Number(itemStats.avgNonGST) || 0) > 0), [itemStats]);
@@ -782,9 +827,25 @@
                                         })}
                                     </div>
                                     <div className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-xl">
-                                        <div className="bg-slate-900 p-5 px-8 flex justify-between items-center">
-                                            <h3 className="text-white font-black italic tracking-widest uppercase text-sm">Stock in {selectedWH}</h3>
-                                            <span className="bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full">{tableData.length} Products</span>
+                                        <div className="bg-slate-900 p-4 px-8 flex flex-wrap justify-between items-center gap-3">
+                                            <div className="flex items-center gap-3">
+                                                <h3 className="text-white font-black italic tracking-widest uppercase text-sm">Stock in {selectedWH}</h3>
+                                                <span className="bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full">{tableData.length} Products</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <div className="relative">
+                                                    <input 
+                                                        type="text" 
+                                                        placeholder="🔍 Search (e.g. Satia, 70)..."
+                                                        value={dashSearch} 
+                                                        onChange={e => setDashSearch(e.target.value)} 
+                                                        className="px-4 py-2 pr-7 rounded-xl bg-slate-800 text-white text-xs font-bold border border-slate-700 outline-none focus:border-blue-500 w-56 placeholder-slate-400"
+                                                    />
+                                                    {dashSearch && (
+                                                        <button onClick={() => setDashSearch('')} className="absolute right-2 top-2 text-slate-400 hover:text-white text-xs font-bold">×</button>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
                                         <div className="scroll-top-table">
                                             <table className="w-full text-left text-sm font-bold uppercase">
@@ -963,6 +1024,11 @@
                                                                     )
                                                                 )}
                                                             </div>
+                                                            {otherWhStocks.length > 0 && (
+                                                                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-center text-xs font-bold text-blue-800">
+                                                                    📍 Dusre Warehouse me stock available: <b>{otherWhStocks.join(' | ')}</b>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     )}
                                                 </div>
