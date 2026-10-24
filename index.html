@@ -1,0 +1,1606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Satija Paper WMS v7.1</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com/3.4.1"></script>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for in-browser JSX parsing -->
+    <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+    <!-- SweetAlert2 for Toast notifications -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #f8fafc; }
+        .sidebar-active { background: #2563eb; color: white; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(37,99,235,0.4); }
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .wh-box { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; }
+        .wh-box:hover { transform: translateY(-3px); }
+        .wh-box.active { border: 3px solid #2563eb; background: #eff6ff; }
+        .grand-total-bar { background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%); }
+        .dropdown-list { position: absolute; width: 100%; background: white; border: 2px solid #2563eb; border-radius: 12px; box-shadow: 0 25px 50px rgba(0,0,0,0.15); z-index: 9999; max-height: 200px; overflow-y: auto; margin-top: 4px; }
+        .dropdown-list div { padding: 10px 16px; cursor: pointer; font-weight: 700; text-transform: uppercase; font-size: 11px; border-bottom: 1px solid #f1f5f9; transition: all 0.15s; }
+        .dropdown-list div:hover { background: #2563eb; color: white; }
+        .scroll-top-table { overflow-x: auto; overflow-y: visible; direction: ltr; }
+        @media (max-width: 768px) {
+            .sidebar-desktop { display: none; }
+            .mobile-header { display: flex !important; }
+            .mobile-nav { display: flex !important; }
+            main { padding: 1rem !important; padding-bottom: 5rem !important; }
+        }
+        @media (min-width: 769px) { .mobile-header { display: none !important; } .mobile-nav { display: none !important; } }
+        .mobile-header { display: none; }
+        .mobile-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 200; background: #0f172a; }
+        .btn-spin::before { content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 8px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .wh-group-header { background: linear-gradient(90deg, #1e40af 0%, #2563eb 100%); color: white; padding: 10px 20px; font-weight: 900; font-size: 13px; text-transform: uppercase; letter-spacing: 2px; }
+        .net-mode-glow { animation: net-pulse 1.5s infinite; }
+        @keyframes net-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0.4); } 50% { box-shadow: 0 0 0 8px rgba(245,158,11,0); } }
+        .frozen-badge { display: inline-block; font-size: 8px; font-weight: 900; letter-spacing: 1px; padding: 2px 6px; border-radius: 6px; background: #e0f2fe; color: #0369a1; vertical-align: middle; }
+        .api-banner { background: linear-gradient(90deg, #b45309, #d97706); color: white; padding: 8px 16px; font-size: 12px; font-weight: bold; text-align: center; }
+    </style>
+</head>
+<body>
+    <!-- GitHub Pages to Google Apps Script Bridge -->
+    <script>
+        // =========================================================================
+        // ⚙️ GOOGLE APPS SCRIPT WEB APP URL
+        // Replace this URL with your deployed Google Apps Script Web App URL:
+        // Example: "https://script.google.com/macros/s/AKfycbx.../exec"
+        // =========================================================================
+        const APPS_SCRIPT_URL = "YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+
+        /**
+         * Universal executeGasCall function
+         * Maps google.script.run function names to Apps Script Web App GET / POST endpoints
+         */
+        async function executeGasCall(funcName, args) {
+            // Write actions: processData (STOCK_IN, STOCK_OUT, TRANSFER), updateRecord, deleteRecord
+            if (funcName === 'processData') {
+                const rawPayload = args[0];
+                const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
+                const response = await fetch(APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids CORS preflight
+                    body: JSON.stringify(payload)
+                });
+                return await response.json();
+            }
+
+            if (funcName === 'updateRecord') {
+                const [sheetName, rowNumber, updatedValues] = args;
+                const payload = {
+                    action: 'updateRecord',
+                    sheetName: sheetName,
+                    rowNumber: rowNumber,
+                    updatedValues: typeof updatedValues === 'string' ? JSON.parse(updatedValues) : updatedValues
+                };
+                const response = await fetch(APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(payload)
+                });
+                return await response.json();
+            }
+
+            if (funcName === 'deleteRecord') {
+                const [sheetName, rowNumber] = args;
+                const payload = {
+                    action: 'deleteRecord',
+                    sheetName: sheetName,
+                    rowNumber: rowNumber
+                };
+                const response = await fetch(APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(payload)
+                });
+                return await response.json();
+            }
+
+            // Read actions: GET requests
+            const params = new URLSearchParams();
+            params.append('action', funcName);
+
+            if (funcName === 'getTodayLog') {
+                params.append('sheet', args[0] || 'SalesLog');
+            } else if (funcName === 'getLogsByDateRange') {
+                params.append('sheet', args[0] || '');
+                params.append('fromDate', args[1] || '');
+                params.append('toDate', args[2] || '');
+            } else if (funcName === 'searchRecords') {
+                params.append('sheet', args[0] || '');
+                params.append('party', args[1] || '');
+                params.append('product', args[2] || '');
+                params.append('fromDate', args[3] || '');
+                params.append('toDate', args[4] || '');
+            } else if (funcName === 'getProductsFromSheet' || funcName === 'getPartiesFromSheet') {
+                params.append('sheet', args[0] || '');
+            } else if (funcName === 'getTallyStockReport' || funcName === 'getDailyStockLedger') {
+                params.append('fromDate', args[0] || '');
+                params.append('toDate', args[1] || '');
+                params.append('warehouse', args[2] || 'All');
+                params.append('mill', args[3] || '');
+                params.append('product', args[4] || '');
+            }
+
+            const url = APPS_SCRIPT_URL + (APPS_SCRIPT_URL.includes('?') ? '&' : '?') + params.toString();
+            const response = await fetch(url);
+            // Returns raw text string so that JSON.parse(res) inside existing handlers works seamlessly
+            return await response.text();
+        }
+
+        /**
+         * Drop-in google.script.run proxy bridge
+         */
+        window.google = {
+            script: {
+                get run() {
+                    let successHandler = () => {};
+                    let failureHandler = (err) => console.error(err);
+
+                    const handler = {
+                        get(target, prop) {
+                            if (prop === 'withSuccessHandler') {
+                                return function(fn) {
+                                    successHandler = fn;
+                                    return new Proxy({}, handler);
+                                };
+                            }
+                            if (prop === 'withFailureHandler') {
+                                return function(fn) {
+                                    failureHandler = fn;
+                                    return new Proxy({}, handler);
+                                };
+                            }
+                            return function(...args) {
+                                if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL === "YOUR_APPS_SCRIPT_WEB_APP_URL_HERE") {
+                                    const errMsg = "Apps Script URL configure nahi hai! index.html me APPS_SCRIPT_URL replace karein.";
+                                    console.warn(errMsg);
+                                    if (typeof Swal !== 'undefined') {
+                                        Swal.fire({
+                                            icon: 'warning',
+                                            title: 'Web App URL Missing',
+                                            text: 'index.html me APPS_SCRIPT_URL update karein taaki Google Sheets se connect ho sake.',
+                                            background: '#0f172a',
+                                            color: '#fff'
+                                        });
+                                    }
+                                    failureHandler(new Error(errMsg));
+                                    return;
+                                }
+                                executeGasCall(prop, args)
+                                    .then(data => successHandler(data))
+                                    .catch(err => {
+                                        console.error("API Call Error (" + prop + "):", err);
+                                        failureHandler(err);
+                                    });
+                            };
+                        }
+                    };
+
+                    return new Proxy({}, handler);
+                }
+            }
+        };
+    </script>
+
+    <div id="root"></div>
+
+    <script type="text/babel" data-presets="react,env" data-type="module">
+        const { useState, useEffect, useMemo, useRef } = React;
+        const WAREHOUSES = ["Khera Kalan", "Mukherjee Nagar", "By Truck"];
+        const SALES_PERSONS = ["Chandresh Sale", "Dilip Sale", "Mr. Mukesh", "Mr. Pawan", "Mr. Pranav", "Mr. Rishabh", "Mr. Sonu"];
+        const LOGO_URL = "https://lh3.googleusercontent.com/d/1yncNH52_uB8UKEaz6ut1eoqqMwN0gnEl";
+
+        // ── System-wide number formatting ────────────────────────────────────
+        function n2(value, forceMoney) {
+            const num = Number(value);
+            if (!isFinite(num)) return value;
+            const rounded = Math.round((num + Number.EPSILON) * 100) / 100;
+            return forceMoney ? rounded.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : rounded;
+        }
+
+        function fmtCell(v) { return typeof v === 'number' ? n2(v) : v; }
+
+        const Toast = Swal.mixin({
+            toast: true, position: 'bottom', showConfirmButton: false, timer: 2500, timerProgressBar: true,
+            background: '#0f172a', color: '#ffffff',
+            didOpen: (toast) => { toast.addEventListener('mouseenter', Swal.stopTimer); toast.addEventListener('mouseleave', Swal.resumeTimer); }
+        });
+
+        function App() {
+            const [ledgerData, setLedgerData] = useState([]);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [dashData, setDashData] = useState({ items: [], totalValue: 0 });
+            const [selectedWH, setSelectedWH] = useState(WAREHOUSES[0]);
+            const [masterItems, setMasterItems] = useState([]);
+            const [parties, setParties] = useState([]);
+            const [orderItems, setOrderItems] = useState([]);
+            const [logModal, setLogModal] = useState({ show: false, title: '', data: [] });
+            const [searchQuery, setSearchQuery] = useState('');
+            const [partySearch, setPartySearch] = useState('');
+            const [showResults, setShowResults] = useState(false);
+            const [showParties, setShowParties] = useState(false);
+
+            const [btnLoad, setBtnLoad] = useState({
+                todayPurchase: false, todaySales: false, todayTransfer: false,
+                histPurchase: false, histSales: false, histTransfer: false,
+                summary: false, ledger: false, modifySearch: false,
+                saveTxn: false, saveEdit: false, dlCsv: false, dlPdf: false,
+                dlLedger: false, dlSummary: false
+            });
+            const setBtn = (k, v) => setBtnLoad(prev => ({ ...prev, [k]: v }));
+
+            const [historyFromDate, setHistoryFromDate] = useState(new Date().toISOString().split('T')[0]);
+            const [historyToDate, setHistoryToDate] = useState(new Date().toISOString().split('T')[0]);
+            const [modifySheet, setModifySheet] = useState('SalesLog');
+            const [modifyParty, setModifyParty] = useState('');
+            const [modifyProduct, setModifyProduct] = useState('');
+            const [modifyFromDate, setModifyFromDate] = useState('');
+            const [modifyToDate, setModifyToDate] = useState('');
+            const [modifyResults, setModifyResults] = useState([]);
+            const [editingRow, setEditingRow] = useState(null);
+            const [editValues, setEditValues] = useState({});
+            const [sheetParties, setSheetParties] = useState([]);
+            const [sheetProducts, setSheetProducts] = useState([]);
+            const [showModifyPartyDD, setShowModifyPartyDD] = useState(false);
+            const [showModifyProductDD, setShowModifyProductDD] = useState(false);
+            const [showEditProductDD, setShowEditProductDD] = useState(false);
+            const [showEditPartyDD, setShowEditPartyDD] = useState(false);
+            const [showEditMillDD, setShowEditMillDD] = useState(false);
+            const modifyResultsRef = useRef(null);
+            const [reportData, setReportData] = useState([]);
+            const [repFilters, setRepFilters] = useState({ from: new Date().toISOString().split('T')[0], to: new Date().toISOString().split('T')[0], wh: 'All' });
+
+            const [globalSearch, setGlobalSearch] = useState('');
+            const [showGlobalDD, setShowGlobalDD] = useState(false);
+            const [showPartyRepDD, setShowPartyRepDD] = useState(false);
+            const [globalResults, setGlobalResults] = useState([]);
+            const [globalLoading, setGlobalLoading] = useState(false);
+            const [partyReport, setPartyReport] = useState([]);
+            const [partyRepFilters, setPartyRepFilters] = useState({ from: new Date().toISOString().split('T')[0], to: new Date().toISOString().split('T')[0], party: '' });
+            const [partyRepLoading, setPartyRepLoading] = useState(false);
+
+            const [formData, setFormData] = useState({
+                date: new Date().toISOString().split('T')[0], warehouse: '', toWarehouse: '',
+                mill: '', product: '', qty: '', price: '', billType: 'GST',
+                salesPerson: '', partyName: '', padNo: '', billNo: '', netBillNo: '',
+                discount: '0', freight: '0', freightRecovered: 'No',
+                insurance: '0', cartage: '0', loading: '0'
+            });
+
+            const isNetMode = formData.billType === 'NON-GST';
+            const isConfigured = APPS_SCRIPT_URL && APPS_SCRIPT_URL !== "YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+
+            // ── Reports ─────────────────────────────────────────────────────────
+            const fetchTallyReport = () => {
+                setBtn('summary', true);
+                if (typeof google !== 'undefined') {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            const data = JSON.parse(res);
+                            setReportData(data); setBtn('summary', false);
+                            if (data.length === 0) Toast.fire({ icon: 'info', title: 'No transactions found!' });
+                            else Toast.fire({ icon: 'success', title: data.length + ' products loaded' });
+                        })
+                        .withFailureHandler(err => { setBtn('summary', false); Toast.fire({ icon: 'error', title: err.message }); })
+                        .getTallyStockReport(repFilters.from, repFilters.to, repFilters.wh);
+                }
+            };
+
+            const fetchLedger = () => {
+                if (!formData.product) return Toast.fire({ icon: 'warning', title: 'Select Product!' });
+                setBtn('ledger', true);
+                if (typeof google !== 'undefined') {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            const data = JSON.parse(res);
+                            setLedgerData(data); setBtn('ledger', false);
+                            if (data.length === 0) Toast.fire({ icon: 'info', title: 'No transactions found!' });
+                            else Toast.fire({ icon: 'success', title: data.length + ' rows loaded' });
+                        })
+                        .withFailureHandler(err => { setBtn('ledger', false); Toast.fire({ icon: 'error', title: err.message }); })
+                        .getDailyStockLedger(repFilters.from, repFilters.to, repFilters.wh, formData.mill, formData.product);
+                }
+            };
+
+            const downloadStockReportExcel = () => {
+                if (reportData.length === 0) return Toast.fire({ icon: 'warning', title: 'Load report first!' });
+                setBtn('dlSummary', true);
+                let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"><style>table{border-collapse:collapse;} th,td{border:1px solid #cbd5e1;padding:6px 10px;text-align:center;font-weight:bold;} th{background-color:#1e293b;color:white;text-transform:uppercase;} .text-left{text-align:left;}</style></head><body>`;
+                html += `<table><tr><td colspan="6" style="border:none;text-align:left;font-size:14px;">SATIJA PAPER - STOCK SUMMARY (${repFilters.from} to ${repFilters.to})</td></tr><tr><td colspan="6" style="border:none;text-align:left;">Warehouse: ${repFilters.wh}</td></tr><tr><td colspan="6" style="border:none;"></td></tr>`;
+                html += '<tr><th>Mill</th><th>Product</th><th>Opening Qty</th><th>Inwards Qty</th><th>Outwards Qty</th><th>Closing Qty</th></tr>';
+                reportData.forEach(r => { html += `<tr><td class="text-left">${r.mill}</td><td class="text-left">${r.product}</td><td>${n2(r.opQty)}</td><td>${n2(r.inQty)}</td><td>${n2(r.outQty)}</td><td>${n2(r.clQty)}</td></tr>`; });
+                html += '</table></body></html>';
+                const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Stock_Summary_${repFilters.from}_to_${repFilters.to}.xls`; a.click();
+                Toast.fire({ icon: 'success', title: 'Excel Downloaded!' });
+                setBtn('dlSummary', false);
+            };
+
+            const downloadLedgerPDF = () => {
+                if (ledgerData.length === 0) return Toast.fire({ icon: 'warning', title: 'Load Ledger first!' });
+                setBtn('dlLedger', true);
+                const grouped = {};
+                ledgerData.forEach(row => {
+                    const dKey = row.dateSort || row.date;
+                    if (!grouped[dKey]) grouped[dKey] = { date: row.date, warehouses: {} };
+                    if (!grouped[dKey].warehouses[row.warehouse]) grouped[dKey].warehouses[row.warehouse] = [];
+                    grouped[dKey].warehouses[row.warehouse].push(row);
+                });
+                let html = '<html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;font-size:10px;padding:20px;color:#000;}.header{text-align:center;margin-bottom:15px;border-bottom:3px solid #2563eb;padding-bottom:10px;}.header h1{font-size:22px;margin:0;font-weight:900;text-transform:uppercase;letter-spacing:3px;color:#1e40af;}.info{text-align:center;font-size:11px;color:#666;margin-bottom:20px;}.date-block{margin-bottom:25px;page-break-inside:avoid;}.date-title{background:#0f172a;color:#fff;padding:10px 15px;font-size:13px;font-weight:900;text-transform:uppercase;border-radius:6px 6px 0 0;}.wh-title{background:#e0e7ff;color:#1e3a8a;padding:7px 15px;font-size:11px;font-weight:900;text-transform:uppercase;border-left:4px solid #2563eb;}table{width:100%;border-collapse:collapse;margin-bottom:10px;}th,td{border:1px solid #333;padding:6px 10px;text-align:center;}th{background:#f1f5f9;font-weight:900;text-transform:uppercase;font-size:9px;}@media print{@page{size:A4;margin:10mm;}}</style></head><body>';
+                html += '<div class="header"><h1>Satija Paper</h1><h2>Daily Stock Ledger</h2></div>';
+                html += `<div class="info"><b>Product:</b> ${formData.mill} — ${formData.product}   |   <b>Period:</b> ${repFilters.from} to ${repFilters.to}</div>`;
+                Object.keys(grouped).sort().forEach(dKey => {
+                    const block = grouped[dKey]; html += '<div class="date-block"><div class="date-title">📅 Date: ' + block.date + '</div>';
+                    Object.keys(block.warehouses).forEach(wh => {
+                        html += '<div class="wh-title">🏬 Warehouse: ' + wh + '</div><table><thead><tr><th>Opening Qty</th><th>Inward (+)</th><th>Outward (-)</th><th>Closing Qty</th></tr></thead><tbody>';
+                        block.warehouses[wh].forEach(r => { html += `<tr><td>${n2(r.opQty)}</td><td>+${n2(r.inQty)}</td><td>-${n2(r.outQty)}</td><td><b>${n2(r.clQty)}</b></td></tr>`; });
+                        html += '</tbody></table>';
+                    });
+                    html += '</div>';
+                });
+                html += '</body></html>';
+                const win = window.open('', '_blank', 'width=1100,height=700'); win.document.write(html); win.document.close();
+                setTimeout(() => { win.print(); win.close(); setBtn('dlLedger', false); }, 600);
+            };
+
+            const downloadLedgerCSV = () => {
+                if (ledgerData.length === 0) return Toast.fire({ icon: 'warning', title: 'Pehle Ledger load karein!' });
+                const uniqueDates = [...new Set(ledgerData.map(r => r.date))].sort();
+                let htmlWorkbook = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><style>table { border-collapse: collapse; } th,td { border: 1px solid #cbd5e1; text-align: center; font-weight: bold; } th { background-color: #1e293b; color: white; }</style></head><body>`;
+                uniqueDates.forEach(date => {
+                    htmlWorkbook += `<table id="sheet_${date.replace(/[^a-zA-Z0-9]/g, '_')}" style="margin-bottom:40px;"><tr><td colspan="5" style="border:none; text-align:left; font-size:14px; font-weight:bold;">SATIJA PAPER - STOCK LEDGER: ${date}</td></tr><tr><td colspan="5" style="border:none;">Product: ${formData.mill} - ${formData.product}</td></tr><tr><td colspan="5" style="border:none;"></td></tr><thead><tr><th>Warehouse</th><th>Opening Qty</th><th>Inward (+)</th><th>Outward (-)</th><th>Closing Qty</th></tr></thead><tbody>`;
+                    ledgerData.filter(r => r.date === date).forEach(r => { htmlWorkbook += `<tr><td style="text-align:left;">${r.warehouse}</td><td>${n2(r.opQty)}</td><td>+${n2(r.inQty)}</td><td>-${n2(r.outQty)}</td><td>${n2(r.clQty)}</td></tr>`; });
+                    htmlWorkbook += `</tbody></table>`;
+                });
+                htmlWorkbook += `</body></html>`;
+                const blob = new Blob([htmlWorkbook], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'Ledger_' + formData.product.replace(/[^a-zA-Z0-9]/g, '_') + '_Datewise.xls'; a.click(); Toast.fire({ icon: 'success', title: 'Workbook Downloaded!' });
+            };
+
+            const downloadExcelCSV = () => {
+                if (!logModal.data || logModal.data.length === 0) return; setBtn('dlCsv', true);
+                const headers = logModalColumns;
+                let csv = headers.join(',') + '\n';
+                logModal.data.forEach(row => { csv += headers.map(h => { const v = fmtCell(row[h]); return '"' + (v !== undefined && v !== null ? v.toString().replace(/"/g, '""') : '') + '"'; }).join(',') + '\n'; });
+                const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (logModal.title || 'history').replace(/[^a-zA-Z0-9]/g, '_') + '.csv'; a.click(); setBtn('dlCsv', false);
+            };
+
+            const downloadPDF = () => {
+                if (!logModal.data || logModal.data.length === 0) return; setBtn('dlPdf', true);
+                const headers = logModalColumns;
+                let tableHtml = '<html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;font-size:10px;padding:20px;} table{width:100%;border-collapse:collapse;margin-top:10px;} th,td{border:1px solid #333;padding:6px 8px;text-align:left;white-space:nowrap;} th{background:#1e293b;color:white;font-weight:bold;text-transform:uppercase;} @media print{@page{size:landscape;margin:8mm;}}</style></head><body>';
+                tableHtml += `<div style="text-align:center"><h1>Satija Paper</h1><h2>${logModal.title || 'Report'}</h2></div><table><thead><tr>` + headers.map(h => '<th>' + h + '</th>').join('') + '</tr></thead><tbody>';
+                logModal.data.forEach(row => { tableHtml += '<tr>' + headers.map(h => { const v = fmtCell(row[h]); return '<td>' + (v !== undefined && v !== null ? v : '-') + '</td>'; }).join('') + '</tr>'; });
+                tableHtml += '</tbody></table></body></html>';
+                const win = window.open('', '_blank'); win.document.write(tableHtml); win.document.close();
+                setTimeout(() => { win.print(); win.close(); setBtn('dlPdf', false); }, 600);
+            };
+
+            // ── Party Report Excel download ──────────────────────────────────────
+            const downloadPartyReportExcel = () => {
+                if (partyReport.length === 0) return Toast.fire({ icon: 'warning', title: 'Load report first!' });
+                let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"><style>table{border-collapse:collapse;} th,td{border:1px solid #cbd5e1;padding:6px 10px;text-align:center;font-weight:bold;} th{background-color:#1e293b;color:white;text-transform:uppercase;} .text-left{text-align:left;}</style></head><body>`;
+                html += `<table><tr><td colspan="6" style="border:none;text-align:left;font-size:14px;">SATIJA PAPER - PARTY-WISE SALES (${partyRepFilters.from} to ${partyRepFilters.to})</td></tr><tr><td colspan="6" style="border:none;"></td></tr>`;
+                html += '<tr><th>#</th><th>Party Name</th><th>Bills</th><th>Total Qty</th><th>Total Amount</th><th>Total Profit</th></tr>';
+                partyReport.forEach((p, i) => { html += `<tr><td>${i + 1}</td><td class="text-left">${p.party}</td><td>${p.bills}</td><td>${n2(p.totalQty)}</td><td>${p.totalAmt.toFixed(2)}</td><td>${p.totalProfit.toFixed(2)}</td></tr>`; });
+                html += '</table></body></html>';
+                const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Party_Report_${partyRepFilters.from}_to_${partyRepFilters.to}.xls`; a.click();
+                Toast.fire({ icon: 'success', title: 'Excel Downloaded!' });
+            };
+
+            // ── Data loading ─────────────────────────────────────────────────────
+            useEffect(() => { refreshData(); }, []);
+            useEffect(() => {
+                if (activeTab === 'modify' && typeof google !== 'undefined') {
+                    google.script.run.withSuccessHandler(res => setSheetParties(JSON.parse(res))).getPartiesFromSheet(modifySheet);
+                    google.script.run.withSuccessHandler(res => setSheetProducts(JSON.parse(res))).getProductsFromSheet(modifySheet);
+                }
+            }, [activeTab, modifySheet]);
+            useEffect(() => { if (modifyResults.length > 0 && modifyResultsRef.current) modifyResultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [modifyResults]);
+
+            const [refreshing, setRefreshing] = useState(false);
+            const refreshData = (showStatus = false) => {
+                if (typeof google === 'undefined') return;
+                if (!isConfigured) return;
+                if (showStatus) { setRefreshing(true); Toast.fire({ icon: 'info', title: '↻ Refreshing data...' }); }
+                let done = 0;
+                const finish = () => { done++; if (done === 3) { setRefreshing(false); if (showStatus) Toast.fire({ icon: 'success', title: '✅ Data Refreshed!' }); } };
+                const fail = (err) => { done++; if (done === 3) setRefreshing(false); if (showStatus) Toast.fire({ icon: 'error', title: 'Refresh failed: ' + err.message }); };
+                google.script.run.withSuccessHandler(res => { setMasterItems(JSON.parse(res)); finish(); }).withFailureHandler(fail).getProductMasterList();
+                google.script.run.withSuccessHandler(res => { setDashData(JSON.parse(res)); finish(); }).withFailureHandler(fail).getDashboardData();
+                google.script.run.withSuccessHandler(res => { setParties(JSON.parse(res)); finish(); }).withFailureHandler(fail).getPartyList();
+            };
+
+            const showTodayEntries = (type, baseSheetName, btnKey) => {
+                setBtn(btnKey, true);
+                if (typeof google !== 'undefined') {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            let parsedData = []; try { parsedData = JSON.parse(res); } catch(e) {}
+                            if (!parsedData || parsedData.length === 0) Toast.fire({ icon: 'info', title: 'No entries for today!' });
+                            setLogModal({ show: true, title: "Today's " + type, data: parsedData || [] }); setBtn(btnKey, false);
+                        })
+                        .withFailureHandler(err => { setBtn(btnKey, false); Toast.fire({ icon: 'error', title: err.message }); })
+                        .getTodayLog(baseSheetName);
+                }
+            };
+
+            const fetchHistoryRange = (type, baseSheetName, btnKey) => {
+                if (historyFromDate > historyToDate) return Toast.fire({ icon: 'warning', title: 'From Date should be before To Date!' });
+                setBtn(btnKey, true);
+                google.script.run.withSuccessHandler(res => {
+                    let data = []; try { data = JSON.parse(res); } catch(e) {}
+                    if (data.length === 0) Toast.fire({ icon: 'info', title: 'No Record Found' });
+                    setLogModal({ show: true, title: type + ' (' + historyFromDate + ' to ' + historyToDate + ')', data }); setBtn(btnKey, false);
+                }).withFailureHandler(err => { setBtn(btnKey, false); Toast.fire({ icon: 'error', title: err.message }); }).getLogsByDateRange(baseSheetName, historyFromDate, historyToDate);
+            };
+
+            // ── Memos ────────────────────────────────────────────────────────────
+            const filteredItems = useMemo(() => {
+                if (!searchQuery) return [];
+                return masterItems.filter(item => item.label.toLowerCase().includes(searchQuery.toLowerCase())).slice(0, 8);
+            }, [searchQuery, masterItems]);
+
+            const tableData = useMemo(() => dashData.items.filter(item => item.warehouse === selectedWH), [selectedWH, dashData.items]);
+
+            const itemStats = useMemo(() => dashData.items.find(i => i.product === formData.product && i.warehouse === formData.warehouse && i.mill === formData.mill) || { qty: 0, avgGST: 0, avgNonGST: 0 }, [formData.product, formData.warehouse, formData.mill, dashData.items]);
+
+            // Price Freeze indicator: stock 0 hai lekin last rate saved hai (frozen)
+            const isFrozenRate = useMemo(() => (Number(itemStats.qty) || 0) === 0 && ((Number(itemStats.avgGST) || 0) > 0 || (Number(itemStats.avgNonGST) || 0) > 0), [itemStats]);
+
+            const currentTotal = useMemo(() => {
+                const subTotal = (Number(formData.qty) || 0) * (Number(formData.price) || 0);
+                return subTotal - (Number(formData.discount) || 0);
+            }, [formData.qty, formData.price, formData.discount]);
+
+            const grandTotals = useMemo(() => orderItems.reduce((acc, curr) => ({ qty: acc.qty + (Number(curr.qty) || 0), amount: acc.amount + (Number(curr.total) || 0) }), { qty: 0, amount: 0 }), [orderItems]);
+
+            // Auto-fill price for Stock Out
+            useEffect(() => {
+                if (!formData.product || !formData.warehouse || activeTab !== 'out') return;
+                if (isNetMode) { const avgNonGST = Number(itemStats.avgNonGST) || 0; setFormData(prev => ({ ...prev, price: avgNonGST > 0 ? avgNonGST.toString() : '' })); }
+                else { const avgGST = Number(itemStats.avgGST) || 0; setFormData(prev => ({ ...prev, price: avgGST > 0 ? avgGST.toString() : '' })); }
+            }, [formData.product, formData.billType, formData.warehouse, activeTab]);
+
+            const saveNetRateToMaster = (mill, product, warehouse, netRate) => {
+                if (typeof google === 'undefined') return;
+                const payload = { action: 'STOCK_IN', date: formData.date, warehouse: warehouse, billType: 'NON-GST', items: [{ mill, product, qty: 0, price: netRate, billType: 'NON-GST', unit: 'Ream' }] };
+                google.script.run.withSuccessHandler(() => Toast.fire({ icon: 'success', title: '✅ Rate saved to Master!' })).withFailureHandler(err => Toast.fire({ icon: 'error', title: err.message })).processData(JSON.stringify(payload));
+            };
+
+            // ── Add item to order list ───────────────────────────────────────────
+            const addItemToList = () => {
+                if (!formData.product) return Toast.fire({ icon: 'warning', title: 'Select product!' });
+                if (!formData.qty || Number(formData.qty) <= 0) return Toast.fire({ icon: 'error', title: 'Sahi Quantity bhariye!' });
+
+                // Transfer: validate rate only
+                if (activeTab === 'transfer') {
+                    if (!formData.price || Number(formData.price) <= 0) return Toast.fire({ icon: 'error', title: 'Transfer Rate zaroori hai!' });
+                    const newItem = { ...formData, id: Date.now(), total: 0, billType: 'GST', rate: formData.price };
+                    setOrderItems([...orderItems, newItem]);
+                    setFormData({ ...formData, product: '', mill: '', price: '', qty: '' });
+                    setSearchQuery('');
+                    Toast.fire({ icon: 'success', title: '🔄 Item Added' });
+                    return;
+                }
+
+                // NET mode (Stock Out NON-GST)
+                if (isNetMode && activeTab === 'out') {
+                    const salePrice = Number(formData.price) || 0;
+                    if (salePrice <= 0) return Toast.fire({ icon: 'error', title: 'Enter Net Rate!' });
+                    const existingCostPrice = Number(itemStats.avgNonGST) || 0;
+                    if (existingCostPrice === 0) {
+                        Swal.fire({
+                            title: '💰 Cost Price (Net)',
+                            html: `<div style="text-align:left;font-size:13px;margin-bottom:12px;color:#444"><b style="color:#1a5c2a">${formData.mill} — ${formData.product}</b><br><br><div style="display:flex;justify-content:space-between;background:#f0f5ec;padding:10px;border-radius:8px;margin-bottom:8px"><span style="color:#666">Sale Price:</span><b style="color:#1a5c2a">₹${salePrice}</b></div><span style="color:#d97706;font-size:12px">⚠️ Is product ka Cost Price saved nahi hai. MasterStock update ke liye daale:</span></div><input id="swal-cost-price" class="swal2-input" type="number" placeholder="Cost Price (₹)" min="1" style="font-size:18px;font-weight:700;text-align:center;border:2px solid #d97706">`,
+                            confirmButtonText: '✅ Save Cost & Add',
+                            confirmButtonColor: '#1a5c2a',
+                            showCancelButton: true,
+                            cancelButtonText: '✕ Close',
+                            cancelButtonColor: '#94a3b8',
+                            allowOutsideClick: true,
+                            allowEscapeKey: true,
+                            focusConfirm: false,
+                            background: '#fffbeb',
+                            preConfirm: () => { const val = Number(document.getElementById('swal-cost-price').value); if (!val || val <= 0) { Swal.showValidationMessage('Cost Price daalna zaroori hai!'); return false; } return val; }
+                        }).then(result => {
+                            if (!result.isConfirmed) return;
+                            saveNetRateToMaster(formData.mill, formData.product, formData.warehouse, result.value);
+                            const total = (Number(formData.qty) || 0) * salePrice;
+                            const newItem = { ...formData, id: Date.now(), total, billType: 'NON-GST', rate: formData.price };
+                            setOrderItems(prev => [...prev, newItem]);
+                            setFormData({ ...formData, product: '', mill: '', price: '', qty: '', discount: '0', insurance: '0', cartage: '0', loading: '0' });
+                            setSearchQuery('');
+                            Toast.fire({ icon: 'success', title: '🟡 Added + Cost Saved!' });
+                        });
+                        return;
+                    }
+                }
+
+                // Normal Stock In / Stock Out
+                if (!formData.price || Number(formData.price) <= 0) return Toast.fire({ icon: 'error', title: 'Price zaroori hai!' });
+                const newItem = { ...formData, id: Date.now(), total: currentTotal, rate: formData.price };
+                setOrderItems([...orderItems, newItem]);
+                setFormData({ ...formData, product: '', mill: '', price: '', qty: '', discount: '0', insurance: '0', cartage: '0', loading: '0' });
+                setSearchQuery('');
+                Toast.fire({ icon: 'success', title: newItem.billType === 'NON-GST' ? '🟡 Item Added' : '✅ Item Added' });
+            };
+
+            const removeItem = (id) => { setOrderItems(orderItems.filter(item => item.id !== id)); Toast.fire({ icon: 'info', title: 'Removed' }); };
+
+            // ── Submit transaction ───────────────────────────────────────────────
+            const handleSubmit = (action) => {
+                if (action === 'STOCK_OUT' && (!formData.padNo || !formData.partyName || !formData.salesPerson)) return Toast.fire({ icon: 'warning', title: 'Party, Pad No & Sales Person Must!' });
+                if (action === 'TRANSFER' && (!formData.toWarehouse || formData.warehouse === formData.toWarehouse)) return Toast.fire({ icon: 'warning', title: 'Invalid Destination!' });
+                if (orderItems.length === 0) return Toast.fire({ icon: 'error', title: 'Add atleast 1 item!' });
+                setBtn('saveTxn', true);
+                const effectiveBillNo = isNetMode ? (formData.netBillNo || '') : formData.billNo;
+                const payload = {
+                    ...formData, action,
+                    billNo: effectiveBillNo,
+                    partyName: (formData.partyName || '').toUpperCase().trim(),
+                    items: orderItems.map(item => ({ ...item, rate: item.price }))
+                };
+                google.script.run
+                    .withSuccessHandler(res => {
+                        if (res.status === 'success') {
+                            Toast.fire({ icon: 'success', title: res.message });
+                            setOrderItems([]);
+                            setFormData({ ...formData, product: '', qty: '', price: '', padNo: '', billNo: '', netBillNo: '', freight: '0', discount: '0', billType: 'GST', insurance: '0', cartage: '0', loading: '0', toWarehouse: '' });
+                            setPartySearch(''); refreshData();
+                        } else Toast.fire({ icon: 'error', title: res.message });
+                        setBtn('saveTxn', false);
+                    })
+                    .withFailureHandler(err => { setBtn('saveTxn', false); Toast.fire({ icon: 'error', title: err.message }); })
+                    .processData(JSON.stringify(payload));
+            };
+
+            // ── Modify ───────────────────────────────────────────────────────────
+            const handleModifySearch = () => {
+                if (!modifyParty && !modifyProduct && !modifyFromDate && !modifyToDate) return Toast.fire({ icon: 'warning', title: 'Enter search filters!' });
+                setBtn('modifySearch', true); setEditingRow(null);
+                google.script.run.withSuccessHandler(res => {
+                    let data = []; try { data = JSON.parse(res); } catch(e) {}
+                    setModifyResults(data); setBtn('modifySearch', false);
+                    if (data.length === 0) Toast.fire({ icon: 'info', title: 'No records found!' }); else Toast.fire({ icon: 'success', title: data.length + ' records found' });
+                }).withFailureHandler(err => { setBtn('modifySearch', false); Toast.fire({ icon: 'error', title: err.message }); }).searchRecords(modifySheet, modifyParty, modifyProduct, modifyFromDate || '', modifyToDate || '');
+            };
+
+            const startEditing = (row) => {
+                setEditingRow(row);
+                const vals = {}; Object.keys(row).forEach(k => { if (k !== '_sheetRow' && k !== '_sheetName' && k !== 'Date') vals[k] = row[k]; });
+                setEditValues(vals);
+            };
+
+            const handleEditValueChange = (key, value) => {
+                const newVals = { ...editValues, [key]: value };
+                if (modifySheet === 'SalesLog') {
+                    if (['Qty', 'Rate', 'Discount', 'Freight', 'Recovered?', 'Cost Price'].includes(key)) {
+                        const qty = Number(newVals['Qty']) || 0, rate = Number(newVals['Rate']) || 0, disc = Number(newVals['Discount']) || 0;
+                        const amt = (qty * rate) - disc; newVals['Amount'] = amt;
+                        const freight = Number(newVals['Freight']) || 0, isRec = String(newVals['Recovered?']).toLowerCase().trim() === 'yes', cp = Number(newVals['Cost Price']) || 0;
+                        newVals['Profit'] = Number((amt - (qty * cp) - (isRec ? 0 : freight)).toFixed(2));
+                    }
+                }
+                if (modifySheet === 'PurchaseLog') {
+                    if (['Qty', 'Price'].includes(key)) newVals['Amount'] = (Number(newVals['Qty']) || 0) * (Number(newVals['Price']) || 0);
+                }
+                setEditValues(newVals);
+            };
+
+            const saveEdit = () => {
+                if (!editingRow || !editingRow._sheetRow) return;
+                setBtn('saveEdit', true);
+                const actualSheet = editingRow._sheetName || modifySheet;
+                google.script.run.withSuccessHandler(res => {
+                    if (res.status === 'success') { Toast.fire({ icon: 'success', title: res.message }); setEditingRow(null); handleModifySearch(); refreshData(); }
+                    else Toast.fire({ icon: 'error', title: res.message });
+                    setBtn('saveEdit', false);
+                }).withFailureHandler(err => { setBtn('saveEdit', false); Toast.fire({ icon: 'error', title: err.message }); }).updateRecord(actualSheet, editingRow._sheetRow, JSON.stringify(editValues));
+            };
+
+            const deleteEntry = (row) => {
+                Swal.fire({ title: 'Are you sure?', text: "Permanent delete!", icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#64748b', confirmButtonText: 'Yes, Delete!', background: '#0f172a', color: '#fff' }).then(result => {
+                    if (result.isConfirmed) {
+                        const actualSheet = row._sheetName || modifySheet;
+                        google.script.run.withSuccessHandler(res => {
+                            if (res.status === 'success') { Toast.fire({ icon: 'success', title: res.message }); handleModifySearch(); refreshData(); }
+                            else Toast.fire({ icon: 'error', title: res.message });
+                        }).withFailureHandler(err => Toast.fire({ icon: 'error', title: err.message })).deleteRecord(actualSheet, row._sheetRow);
+                    }
+                });
+            };
+
+            const isAutoCalcField = (key) => (modifySheet === 'SalesLog' && (key === 'Amount' || key === 'Profit')) || (modifySheet === 'PurchaseLog' && key === 'Amount');
+
+            // ── Split-group detection for Modify > SalesLog ─────────────────────
+            const modifyGroupInfo = useMemo(() => {
+                if (modifySheet !== 'SalesLog' || modifyResults.length === 0) return {};
+                const keyOf = (row) => ['Date','Pad No.','Bill No.','Party Name','Mills','Product','Warehouse','Bill Type']
+                    .map(k => (row[k] !== undefined ? row[k] : '')).join('||');
+                const groups = {};
+                modifyResults.forEach((row, idx) => {
+                    const k = keyOf(row);
+                    if (!groups[k]) groups[k] = [];
+                    groups[k].push(idx);
+                });
+                const info = {};
+                Object.values(groups).forEach((indices, gIdx) => {
+                    if (indices.length > 1) {
+                        indices.forEach((idx, partIdx) => {
+                            info[idx] = { groupIdx: gIdx, part: partIdx + 1, total: indices.length };
+                        });
+                    }
+                });
+                return info;
+            }, [modifyResults, modifySheet]);
+
+            const modifyResultColumns = useMemo(() => {
+                if (modifyResults.length === 0) return [];
+                const seen = new Set(); const ordered = [];
+                modifyResults.forEach(row => { Object.keys(row).forEach(k => { if (k.startsWith('_')) return; if (!seen.has(k)) { seen.add(k); ordered.push(k); } }); });
+                return ordered;
+            }, [modifyResults]);
+
+            const logModalColumns = useMemo(() => {
+                if (!logModal.data || logModal.data.length === 0) return [];
+                const seen = new Set(); const ordered = [];
+                logModal.data.forEach(row => { Object.keys(row).forEach(k => { if (k.startsWith('_')) return; if (!seen.has(k)) { seen.add(k); ordered.push(k); } }); });
+                return ordered;
+            }, [logModal.data]);
+
+            const freightDistribution = useMemo(() => {
+                const totalFreight = Number(formData.freight) || 0, totalQty = orderItems.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
+                if (totalFreight <= 0 || totalQty <= 0) return {};
+                const dist = {}; let runningSum = 0;
+                orderItems.forEach((item, idx) => {
+                    if (idx === orderItems.length - 1) dist[item.id] = Math.round((totalFreight - runningSum) * 100) / 100;
+                    else { const share = Math.round((Number(item.qty) / totalQty) * totalFreight * 100) / 100; dist[item.id] = share; runningSum += share; }
+                });
+                return dist;
+            }, [orderItems, formData.freight]);
+
+            const groupedLedger = useMemo(() => {
+                const grouped = {};
+                ledgerData.forEach(row => {
+                    const dKey = row.dateSort || row.date;
+                    if (!grouped[dKey]) grouped[dKey] = { date: row.date, warehouses: {} };
+                    if (!grouped[dKey].warehouses[row.warehouse]) grouped[dKey].warehouses[row.warehouse] = [];
+                    grouped[dKey].warehouses[row.warehouse].push(row);
+                });
+                return grouped;
+            }, [ledgerData]);
+
+            const tabs = [
+                { id: 'dashboard', icon: '📊', label: 'Dashboard', short: 'Dash' },
+                { id: 'in', icon: '📥', label: 'Stock In', short: 'In' },
+                { id: 'out', icon: '📤', label: 'Stock Out', short: 'Out' },
+                { id: 'transfer', icon: '🔄', label: 'Transfer', short: 'Trans' },
+                { id: 'history', icon: '📅', label: 'History', short: 'History' },
+                { id: 'modify', icon: '✏️', label: 'Modify', short: 'Modify' },
+                { id: 'report', icon: '📜', label: 'Stock Book', short: 'Book' },
+                { id: 'search', icon: '🔍', label: 'Search', short: 'Search' },
+                { id: 'partyreport', icon: '👤', label: 'Party Report', short: 'Party' },
+            ];
+
+            const switchTab = (id) => { setActiveTab(id); setOrderItems([]); setFormData(prev => ({ ...prev, product: '', qty: '', price: '', warehouse: '', toWarehouse: '', mill: '', billType: 'GST', billNo: '', netBillNo: '', partyName: '', padNo: '', discount: '0', freight: '0', freightRecovered: 'No', insurance: '0', cartage: '0', loading: '0' })); setSearchQuery(''); setPartySearch(''); };
+
+            return (
+                <div className="flex h-screen overflow-hidden text-slate-900 bg-slate-50 flex-col">
+                    {!isConfigured && (
+                        <div className="api-banner flex items-center justify-center gap-2">
+                            <span>⚠️ <b>Configuration Required:</b> Please set your Google Apps Script Web App URL in <code>index.html</code> (line 46) to connect to Google Sheets.</span>
+                        </div>
+                    )}
+
+                    <div className="flex flex-1 overflow-hidden">
+                        {/* Mobile header */}
+                        <div className="mobile-header fixed top-0 left-0 right-0 z-[150] bg-[#0f172a] px-4 py-3 items-center justify-between shadow-lg">
+                            <div className="flex items-center gap-2">
+                                <img src={LOGO_URL} alt="Logo" className="w-8 h-8 rounded-full border border-blue-500 object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                                <span className="text-white font-black text-sm italic uppercase tracking-tight">SATIJA PAPER</span>
+                            </div>
+                        </div>
+
+                        {/* Mobile nav */}
+                        <div className="mobile-nav flex-row items-center justify-around py-2 px-1 border-t border-slate-800 gap-2">
+                            {tabs.filter(t => ['dashboard', 'in', 'out', 'transfer', 'report'].includes(t.id)).map(tab => (
+                                <button key={tab.id} onClick={() => switchTab(tab.id)} className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-[9px] font-bold transition ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>
+                                    <span className="text-base">{tab.icon}</span><span>{tab.short}</span>
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Sidebar */}
+                        <aside className="sidebar-desktop w-72 bg-[#0f172a] text-slate-400 flex flex-col shadow-2xl z-[100]">
+                            <div className="p-6 text-center border-b border-slate-800">
+                                <img src={LOGO_URL} alt="Satija Paper Logo" className="w-16 h-16 mx-auto mb-2 rounded-full object-cover border-2 border-blue-500 shadow-lg shadow-blue-500/30" onError={e => { e.target.style.display = 'none'; }} />
+                                <h1 className="text-white font-black text-xl italic tracking-tighter uppercase">SATIJA PAPER</h1>
+                            </div>
+                            <nav className="flex-1 px-4 mt-4 space-y-1 overflow-y-auto custom-scroll pb-6">
+                                {tabs.map(tab => (
+                                    <button key={tab.id} onClick={() => switchTab(tab.id)} className={`w-full text-left px-4 py-3 font-bold transition rounded-lg ${activeTab === tab.id ? 'sidebar-active' : 'hover:text-white'}`}>
+                                        {tab.icon} {tab.label}
+                                    </button>
+                                ))}
+                            </nav>
+                        </aside>
+
+                        <main className="flex-1 p-8 overflow-y-auto custom-scroll" style={{ paddingTop: window.innerWidth < 769 ? '4rem' : undefined }}>
+
+                            {/* ── DASHBOARD ── */}
+                            {activeTab === 'dashboard' && (
+                                <div className="max-w-6xl mx-auto space-y-8">
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div className="md:col-span-2 bg-gradient-to-br from-blue-600 to-blue-800 p-6 rounded-2xl text-white shadow-lg">
+                                            <p className="text-[10px] font-black uppercase tracking-widest opacity-70">Total Inventory Value</p>
+                                            <h2 className="text-4xl font-black mt-1">₹{n2(dashData.totalValue, true)}</h2>
+                                            <p className="text-[10px] opacity-60 mt-2">{dashData.items.length} products across {WAREHOUSES.length} warehouses</p>
+                                        </div>
+                                        <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col justify-between">
+                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Today's Activity</p>
+                                            <div className="flex gap-2 mt-3 flex-wrap">
+                                                <button onClick={() => showTodayEntries('Purchases', 'PurchaseLog', 'todayPurchase')} disabled={btnLoad.todayPurchase} className={`flex-1 px-3 py-2 bg-blue-50 text-blue-700 rounded-xl text-[9px] font-black uppercase hover:bg-blue-600 hover:text-white transition disabled:opacity-60 ${btnLoad.todayPurchase ? 'btn-spin' : ''}`}>{btnLoad.todayPurchase ? '...' : '📥 Purchases'}</button>
+                                                <button onClick={() => showTodayEntries('Sales', 'SalesLog', 'todaySales')} disabled={btnLoad.todaySales} className={`flex-1 px-3 py-2 bg-emerald-50 text-emerald-700 rounded-xl text-[9px] font-black uppercase hover:bg-emerald-600 hover:text-white transition disabled:opacity-60 ${btnLoad.todaySales ? 'btn-spin' : ''}`}>{btnLoad.todaySales ? '...' : '📤 Sales'}</button>
+                                                <button onClick={() => showTodayEntries('Transfers', 'TransferLog', 'todayTransfer')} disabled={btnLoad.todayTransfer} className={`flex-1 px-3 py-2 bg-orange-50 text-orange-700 rounded-xl text-[9px] font-black uppercase hover:bg-orange-600 hover:text-white transition disabled:opacity-60 ${btnLoad.todayTransfer ? 'btn-spin' : ''}`}>{btnLoad.todayTransfer ? '...' : '🔄 Transfers'}</button>
+                                            </div>
+                                        </div>
+                                        <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col justify-between">
+                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Quick Actions</p>
+                                            <div className="flex flex-col gap-2 mt-3">
+                                                <button onClick={() => refreshData(true)} disabled={refreshing} className={`w-full px-3 py-2 bg-slate-900 text-white rounded-xl text-[9px] font-black uppercase hover:bg-blue-600 transition disabled:opacity-60 ${refreshing ? 'btn-spin' : ''}`}>{refreshing ? 'Refreshing...' : '↻ Refresh Data'}</button>
+                                                <button onClick={() => switchTab('search')} className="w-full px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-[9px] font-black uppercase hover:bg-slate-900 hover:text-white transition">🔍 Search Logs</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        {WAREHOUSES.map(wh => {
+                                            const whItems = dashData.items.filter(item => item.warehouse === wh);
+                                            const whTotal = whItems.reduce((acc, curr) => acc + (parseFloat(curr.totalVal) || 0), 0);
+                                            const isActive = selectedWH === wh;
+                                            return (
+                                                <div key={wh} onClick={() => setSelectedWH(wh)} className={`wh-box p-6 rounded-[2rem] shadow-md border ${isActive ? 'active shadow-blue-100' : 'bg-white border-slate-100'}`}>
+                                                    <div className="flex justify-between items-center mb-4">
+                                                        <h3 className={`text-lg font-black italic uppercase ${isActive ? 'text-blue-700' : 'text-slate-800'}`}>{wh}</h3>
+                                                        <span className={`text-[9px] font-black px-2 py-1 rounded-lg ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{whItems.length} ITEMS</span>
+                                                    </div>
+                                                    <p className="text-[10px] font-bold text-slate-400 uppercase">Warehouse Value</p>
+                                                    <p className={`text-xl font-black ${isActive ? 'text-blue-600' : 'text-slate-600'}`}>₹{n2(whTotal, true)}</p>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    <div className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-xl">
+                                        <div className="bg-slate-900 p-5 px-8 flex justify-between items-center">
+                                            <h3 className="text-white font-black italic tracking-widest uppercase text-sm">Stock in {selectedWH}</h3>
+                                            <span className="bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full">{tableData.length} Products</span>
+                                        </div>
+                                        <div className="scroll-top-table">
+                                            <table className="w-full text-left text-sm font-bold uppercase">
+                                                <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
+                                                    <tr><th className="p-4 pl-6">Mill & Product</th><th className="p-4 text-center">Stock</th><th className="p-4 text-center">Rate</th><th className="p-4 text-right pr-6">Value</th></tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                    {tableData.length > 0 ? tableData.map((item, i) => {
+                                                        const rowQty = Number(item.qty) || 0;
+                                                        const rowRate = Number(item.avgGST) > 0 ? Number(item.avgGST) : (Number(item.avgNonGST) > 0 ? Number(item.avgNonGST) : 0);
+                                                        const isFrozen = rowQty === 0 && rowRate > 0;
+                                                        return (
+                                                            <tr key={i} className="hover:bg-blue-50/40 transition">
+                                                                <td className="p-4 pl-6"><p className="text-[9px] text-slate-400 leading-none mb-0.5">{item.mill}</p><p className="text-slate-800 text-sm">{item.product}</p></td>
+                                                                <td className="p-4 text-center text-blue-600 font-black text-base">{n2(item.qty)} <span className="text-[9px] opacity-40">{item.unit || 'REAM'}</span></td>
+                                                                <td className={`p-4 text-center font-black text-sm ${isFrozen ? 'text-sky-600' : 'text-emerald-600'}`}>
+                                                                    {rowRate > 0 ? '₹' + n2(rowRate, true) : '-'}
+                                                                    {isFrozen && <span className="frozen-badge ml-1">LAST</span>}
+                                                                </td>
+                                                                <td className="p-4 text-right font-black text-slate-700 pr-6 text-sm">₹{n2(item.totalVal, true)}</td>
+                                                            </tr>
+                                                        );
+                                                    }) : (<tr><td colSpan="4" className="p-20 text-center font-black text-slate-300 italic tracking-widest text-xl">Warehouse Empty</td></tr>)}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                    {logModal.show && (
+                                        <div className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-xl mt-8">
+                                            <div className="bg-slate-900 p-5 px-8 flex justify-between items-center">
+                                                <h3 className="text-white font-black italic tracking-widest uppercase text-sm">{logModal.title} <span className="text-blue-400 ml-2">({logModal.data.length} records)</span></h3>
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={downloadExcelCSV} disabled={btnLoad.dlCsv} className={`text-white bg-emerald-600 px-3 py-1 rounded-full text-[10px] font-black hover:bg-emerald-800 transition disabled:opacity-60 ${btnLoad.dlCsv ? 'btn-spin' : ''}`}>{btnLoad.dlCsv ? '...' : 'Excel ⬇'}</button>
+                                                    <button onClick={downloadPDF} disabled={btnLoad.dlPdf} className={`text-white bg-blue-600 px-3 py-1 rounded-full text-[10px] font-black hover:bg-blue-800 transition disabled:opacity-60 ${btnLoad.dlPdf ? 'btn-spin' : ''}`}>{btnLoad.dlPdf ? '...' : 'PDF 🖨'}</button>
+                                                    <button onClick={() => setLogModal({ ...logModal, show: false })} className="text-white bg-rose-500 px-3 py-1 rounded-full text-xs font-bold">Close ×</button>
+                                                </div>
+                                            </div>
+                                            <div className="scroll-top-table">
+                                                <table className="w-full text-left text-[10px] font-bold uppercase">
+                                                    <thead className="bg-slate-50 text-slate-400 font-black"><tr>{logModalColumns.map(h => (<th key={h} className="p-4 whitespace-nowrap">{h}</th>))}</tr></thead>
+                                                    <tbody className="divide-y divide-slate-100">{logModal.data.length > 0 ? logModal.data.map((row, i) => (<tr key={i} className="hover:bg-blue-50 transition">{logModalColumns.map((h, j) => (<td key={j} className="p-4 whitespace-nowrap">{row[h] !== undefined && row[h] !== null && row[h] !== "" ? fmtCell(row[h]) : "-"}</td>))}</tr>)) : (<tr><td colSpan="15" className="p-20 text-center font-black text-slate-300 italic tracking-widest text-xl">No Records Found</td></tr>)}</tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* ── STOCK IN / OUT / TRANSFER ── */}
+                            {(activeTab === 'in' || activeTab === 'out' || activeTab === 'transfer') && (
+                                <div className="max-w-4xl mx-auto space-y-6">
+                                    <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-800 border-b pb-2">
+                                        {activeTab === 'in' ? '📥 Stock Entry (Inward)' : activeTab === 'out' ? '📤 Sales Dispatch (Outward)' : '🔄 Warehouse Transfer'}
+                                    </h1>
+
+                                    {activeTab === 'out' && isNetMode && (
+                                        <div className="net-mode-glow flex items-center gap-4 px-6 py-4 bg-amber-50 border-2 border-amber-400 rounded-2xl">
+                                            <span className="text-2xl">🟡</span>
+                                            <div className="flex-1">
+                                                <p className="text-[11px] font-black text-amber-800 uppercase tracking-widest">NET MODE ACTIVE</p>
+                                                <p className="text-[10px] text-amber-600 mt-0.5">Bill No. = <b>00</b> — NON-GST entry</p>
+                                            </div>
+                                            <button onClick={() => setFormData(prev => ({ ...prev, billType: 'GST', billNo: '', netBillNo: '', price: '' }))} className="px-4 py-2 bg-amber-200 hover:bg-amber-400 text-amber-900 rounded-xl text-[10px] font-black uppercase transition">✕ GST pe wapas</button>
+                                        </div>
+                                    )}
+
+                                    <div className="bg-white p-8 rounded-[3rem] shadow-2xl border border-slate-100 space-y-8">
+                                        {/* Row 1: Date, Warehouse, SalesPerson/ToWarehouse */}
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Transaction Date</label>
+                                                <input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner border" value={formData.date} onChange={e => setFormData({ ...formData, date: e.target.value })} />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] font-black text-blue-600 uppercase ml-2">🏬 Choose Warehouse</label>
+                                                <select className="w-full p-4 bg-blue-50 rounded-2xl font-bold shadow-md border-2 border-blue-200" value={formData.warehouse} onChange={e => setFormData({ ...formData, warehouse: e.target.value, product: '', qty: '', price: '', mill: '' })}>
+                                                    <option value="">-- Select Store --</option>
+                                                    {WAREHOUSES.map(w => <option key={w} value={w}>{w}</option>)}
+                                                </select>
+                                            </div>
+                                            {activeTab === 'out' && (
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Sales Person</label>
+                                                    <select className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner border" value={formData.salesPerson} onChange={e => setFormData({ ...formData, salesPerson: e.target.value })}>
+                                                        <option value="">-- Choose Name --</option>
+                                                        {SALES_PERSONS.map(s => <option key={s} value={s}>{s}</option>)}
+                                                    </select>
+                                                </div>
+                                            )}
+                                            {activeTab === 'transfer' && (
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-black text-orange-500 uppercase ml-2 italic">To Destination Warehouse</label>
+                                                    <select className="w-full p-4 bg-orange-50 rounded-2xl font-bold border-2 border-dashed border-orange-200 shadow-md" value={formData.toWarehouse} onChange={e => setFormData({ ...formData, toWarehouse: e.target.value })}>
+                                                        <option value="">-- Select Target --</option>
+                                                        {WAREHOUSES.filter(w => w !== formData.warehouse).map(w => <option key={w} value={w}>{w}</option>)}
+                                                    </select>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Stock Out: Party/Pad/Bill/Freight row */}
+                                        {activeTab === 'out' && formData.warehouse && (
+                                            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 p-6 bg-slate-900 rounded-[2.5rem] shadow-2xl text-white">
+                                                <div className="md:col-span-4 relative">
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Party Name</label>
+                                                    <input placeholder="Search Party..." className="w-full p-4 rounded-xl font-bold bg-slate-800 border-none text-white shadow-inner uppercase" value={partySearch}
+                                                        onChange={e => { setPartySearch(e.target.value.toUpperCase()); setFormData({ ...formData, partyName: e.target.value.toUpperCase() }); setShowParties(true); }}
+                                                        onFocus={() => setShowParties(true)} />
+                                                    {showParties && partySearch.length > 0 && (
+                                                        <div className="absolute w-full bg-white shadow-2xl rounded-xl mt-2 z-[999] max-h-40 overflow-y-auto border font-bold uppercase text-slate-800">
+                                                            {parties.filter(p => p.toString().toLowerCase().includes(partySearch.toLowerCase())).slice(0, 15).map(p => (
+                                                                <div key={p} className="p-3 hover:bg-blue-600 hover:text-white cursor-pointer border-b transition-all" onClick={() => { setPartySearch(p.toString().toUpperCase()); setFormData({ ...formData, partyName: p.toString().toUpperCase() }); setShowParties(false); }}>{p}</div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="md:col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Pad #</label><input type="number" className="w-full p-4 rounded-xl font-bold bg-slate-800 border-none text-white" value={formData.padNo} onChange={e => setFormData({ ...formData, padNo: e.target.value })} /></div>
+                                                <div className="md:col-span-2">
+                                                    <label className="text-[10px] font-black uppercase ml-2 flex items-center gap-2"><span className="text-slate-400">Bill #</span>{isNetMode && <span className="text-amber-400 font-black animate-pulse">● NET MODE</span>}</label>
+                                                    <input type="text" className={`w-full p-4 rounded-xl font-bold border-none text-white transition-all duration-300 ${isNetMode ? 'bg-amber-600 ring-2 ring-amber-400' : 'bg-slate-800'}`}
+                                                        value={formData.billNo}
+                                                        onChange={e => { const val = e.target.value; const goNet = val.trim() === '00'; setFormData({ ...formData, billNo: val, billType: goNet ? 'NON-GST' : 'GST', price: '', netBillNo: goNet ? formData.netBillNo : '' }); }}
+                                                        placeholder="Bill No." />
+                                                </div>
+                                                {isNetMode && (
+                                                    <div className="md:col-span-2">
+                                                        <label className="text-[10px] font-black uppercase ml-2 flex items-center gap-2"><span className="text-amber-400">Net Bill No.</span></label>
+                                                        <input type="text" className="w-full p-4 rounded-xl font-bold bg-amber-50 border-2 border-amber-300 text-amber-800 ring-2 ring-amber-200"
+                                                            value={formData.netBillNo}
+                                                            onChange={e => setFormData({ ...formData, netBillNo: e.target.value })}
+                                                            placeholder="Actual bill no. (optional)" />
+                                                    </div>
+                                                )}
+                                                <div className="md:col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Freight ₹</label><input type="number" className="w-full p-4 rounded-xl font-bold bg-slate-800 border-none text-white" value={formData.freight} onChange={e => setFormData({ ...formData, freight: e.target.value })} /></div>
+                                                <div className="md:col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Recovered?</label><select className="w-full p-4 rounded-xl font-bold bg-slate-800 border-none text-white" value={formData.freightRecovered} onChange={e => setFormData({ ...formData, freightRecovered: e.target.value })}><option value="No">No</option><option value="Yes">Yes</option></select></div>
+                                            </div>
+                                        )}
+
+                                        {/* Product search + item fields */}
+                                        {formData.warehouse ? (
+                                            <div className="p-8 rounded-[3rem] border-2 border-dashed space-y-6 bg-blue-50/50 border-blue-200">
+                                                <div className="relative">
+                                                    <label className="text-[10px] font-black uppercase ml-2 mb-2 block tracking-widest text-blue-500">Type Mill or Product Name</label>
+                                                    <input autoComplete="off" placeholder="Search product database..." className="w-full p-5 rounded-[1.5rem] border-2 font-bold outline-none bg-white text-lg shadow-sm border-blue-200 focus:border-blue-500" value={searchQuery}
+                                                        onChange={e => { setSearchQuery(e.target.value); setShowResults(true); }} />
+                                                    {showResults && filteredItems.length > 0 && (
+                                                        <div className="absolute w-full mt-2 bg-white border-2 border-blue-600 rounded-2xl shadow-2xl z-[9999] max-h-60 overflow-y-auto">
+                                                            {filteredItems.map((item, i) => (
+                                                                <div key={i} onClick={() => { setFormData({ ...formData, mill: item.mill, product: item.name, price: '' }); setSearchQuery(item.label); setShowResults(false); }} className="p-4 hover:bg-blue-600 hover:text-white cursor-pointer border-b flex justify-between items-center uppercase transition-all">
+                                                                    <div><p className="text-[10px] font-black opacity-60">{item.mill}</p><p className="font-black text-sm">{item.name}</p></div>
+                                                                    <span className="text-[10px] font-black px-3 py-1 bg-slate-100 rounded text-slate-500">SELECT ITEM</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Stock info box */}
+                                                    {formData.product && (
+                                                        <div className="mt-4">
+                                                            <div className={`grid gap-4 text-center ${activeTab === 'transfer' ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                                                                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+                                                                    <p className="text-[11px] font-black text-blue-600 uppercase tracking-widest">STOCK IN ({formData.warehouse})</p>
+                                                                    <p className="text-xl font-black text-blue-700">{n2(itemStats.qty || 0)}</p>
+                                                                </div>
+                                                                {activeTab !== 'transfer' && (
+                                                                    !isNetMode ? (
+                                                                        <div className={`rounded-2xl p-4 border ${isFrozenRate ? 'bg-sky-50 border-sky-300' : 'bg-emerald-50 border-emerald-200'}`}>
+                                                                            <p className={`text-[11px] font-black uppercase tracking-widest ${isFrozenRate ? 'text-sky-600' : 'text-emerald-600'}`}>{isFrozenRate ? 'Last Rate (Stock 0)' : 'Current Rate'}</p>
+                                                                            <p className={`text-xl font-black ${isFrozenRate ? 'text-sky-700' : 'text-emerald-700'}`}>₹{n2(itemStats.avgGST || 0, true)} {isFrozenRate && <span className="frozen-badge">LAST</span>}</p>
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4">
+                                                                            <p className="text-[11px] font-black text-amber-700 uppercase tracking-widest">{isFrozenRate ? 'Last Net Rate (Stock 0)' : 'Net Rate'}</p>
+                                                                            <p className="text-xl font-black text-amber-700">{Number(itemStats.avgNonGST) > 0 ? '₹' + n2(itemStats.avgNonGST, true) : 'N/A'} {isFrozenRate && Number(itemStats.avgNonGST) > 0 && <span className="frozen-badge">LAST</span>}</p>
+                                                                        </div>
+                                                                    )
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Item entry row */}
+                                                <div className="flex flex-wrap gap-3 items-end font-bold text-slate-600">
+                                                    {/* Qty */}
+                                                    <div className="space-y-1 flex-1 min-w-[90px]">
+                                                        <label className="text-[10px] uppercase ml-1 opacity-50 block">Quantity</label>
+                                                        <input type="number" min="0" className="w-full p-3 rounded-xl border-2 border-slate-200 bg-white font-bold focus:border-blue-400 outline-none" value={formData.qty} onChange={e => setFormData({ ...formData, qty: e.target.value })} placeholder="Qty" />
+                                                    </div>
+
+                                                    {/* Rate / Transfer Rate */}
+                                                    {activeTab !== 'transfer' ? (
+                                                        <div className="space-y-1 flex-1 min-w-[110px]">
+                                                            <label className="text-[10px] uppercase ml-1 opacity-50 block">{isNetMode ? 'Net Rate' : 'Rate'}</label>
+                                                            <input type="number" className={`w-full p-3 rounded-xl border-2 font-bold focus:outline-none ${isNetMode ? 'bg-amber-50 border-amber-300 text-amber-700 focus:border-amber-500' : 'bg-white border-slate-200 focus:border-blue-400'}`} value={formData.price} onChange={e => setFormData({ ...formData, price: e.target.value })} placeholder="₹" />
+                                                        </div>
+                                                    ) : (
+                                                        <div className="space-y-1 flex-1 min-w-[110px]">
+                                                            <label className="text-[10px] uppercase ml-1 font-black text-orange-600 block">Transfer Rate ₹</label>
+                                                            <input type="number" className="w-full p-3 rounded-xl border-2 border-orange-300 bg-orange-50 text-orange-700 font-bold focus:outline-none focus:border-orange-500" value={formData.price} onChange={e => setFormData({ ...formData, price: e.target.value })} placeholder="₹ per unit" />
+                                                        </div>
+                                                    )}
+
+                                                    {/* By Truck extras (Stock In only) */}
+                                                    {activeTab === 'in' && formData.warehouse === 'By Truck' && (
+                                                        <>
+                                                            <div className="space-y-1 flex-1 min-w-[80px]">
+                                                                <label className="text-[10px] uppercase ml-1 text-purple-600 font-black block">Insurance</label>
+                                                                <input type="number" className="w-full p-3 rounded-xl border-2 border-purple-200 bg-purple-50 text-purple-700 focus:border-purple-400 outline-none" value={formData.insurance} onChange={e => setFormData({ ...formData, insurance: e.target.value })} placeholder="₹" />
+                                                            </div>
+                                                            <div className="space-y-1 flex-1 min-w-[80px]">
+                                                                <label className="text-[10px] uppercase ml-1 text-purple-600 font-black block">Cartage</label>
+                                                                <input type="number" className="w-full p-3 rounded-xl border-2 border-purple-200 bg-purple-50 text-purple-700 focus:border-purple-400 outline-none" value={formData.cartage} onChange={e => setFormData({ ...formData, cartage: e.target.value })} placeholder="₹" />
+                                                            </div>
+                                                            <div className="space-y-1 flex-1 min-w-[80px]">
+                                                                <label className="text-[10px] uppercase ml-1 text-purple-600 font-black block">Loading</label>
+                                                                <input type="number" className="w-full p-3 rounded-xl border-2 border-purple-200 bg-purple-50 text-purple-700 focus:border-purple-400 outline-none" value={formData.loading} onChange={e => setFormData({ ...formData, loading: e.target.value })} placeholder="₹" />
+                                                            </div>
+                                                        </>
+                                                    )}
+
+                                                    {/* Discount (Stock Out only) */}
+                                                    {activeTab === 'out' && (
+                                                        <div className="space-y-1 flex-1 min-w-[90px]">
+                                                            <label className="text-[10px] uppercase ml-1 text-rose-500 font-black block">Discount</label>
+                                                            <input type="number" className="w-full p-3 rounded-xl border-2 border-rose-200 bg-rose-50 font-black text-rose-600 focus:outline-none" value={formData.discount} onChange={e => setFormData({ ...formData, discount: e.target.value })} />
+                                                        </div>
+                                                    )}
+
+                                                    {/* Amount display */}
+                                                    {activeTab !== 'transfer' && (
+                                                        <div className={`flex flex-col items-center justify-center px-5 py-3 rounded-xl text-white font-black shadow-lg min-w-[90px] ${isNetMode ? 'bg-amber-600' : 'bg-emerald-600'}`}>
+                                                            <p className="text-[8px] uppercase opacity-80">Amount</p>
+                                                            <p className="text-base font-black">₹{n2(currentTotal, true)}</p>
+                                                        </div>
+                                                    )}
+
+                                                    <button onClick={addItemToList} className={`px-6 py-3 rounded-xl uppercase text-[10px] font-black tracking-widest shadow-lg text-white transition-all hover:-translate-y-0.5 ${activeTab === 'transfer' ? 'bg-orange-500 hover:bg-orange-700' : isNetMode ? 'bg-amber-500 hover:bg-amber-700' : 'bg-blue-600 hover:bg-black'}`}>
+                                                        + Add Item
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="p-12 text-center text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-[2rem] bg-slate-50/50">
+                                                ⚠️ Pehle upar se ek Warehouse select karein jisme entry karni hai.
+                                            </div>
+                                        )}
+
+                                        {/* Order items table */}
+                                        {orderItems.length > 0 && (
+                                            <div className="border rounded-[2.5rem] overflow-hidden bg-white shadow-2xl">
+                                                <div className="scroll-top-table">
+                                                    <table className="w-full text-xs text-left font-bold uppercase border-collapse">
+                                                        <thead className="bg-slate-900 text-white text-[10px] font-black tracking-widest">
+                                                            <tr>
+                                                                <th className="p-5">Product Details</th>
+                                                                <th className="p-5 text-center">Qty</th>
+                                                                <th className="p-5 text-right">{activeTab === 'transfer' ? 'Transfer Rate' : 'Rate'}</th>
+                                                                {activeTab === 'in' && formData.warehouse === 'By Truck' && <th className="p-5 text-right text-purple-300">Extras</th>}
+                                                                {activeTab === 'out' && <th className="p-5 text-right text-rose-300">Disc.</th>}
+                                                                {activeTab !== 'transfer' && <th className="p-5 text-right">Net Amt</th>}
+                                                                {activeTab === 'out' && Number(formData.freight) > 0 && <th className="p-5 text-right text-cyan-300">Freight</th>}
+                                                                <th className="p-5 text-center">Action</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-100 text-slate-700">
+                                                            {orderItems.map(item => (
+                                                                <tr key={item.id} className="hover:bg-blue-50/50 transition">
+                                                                    <td className="p-5">{item.mill} - {item.product}</td>
+                                                                    <td className="p-5 text-center text-blue-600 font-black">{item.qty || '-'}</td>
+                                                                    <td className={`p-5 text-right font-black ${activeTab === 'transfer' ? 'text-orange-600' : ''}`}>₹{n2(item.price, true)}</td>
+                                                                    {activeTab === 'in' && formData.warehouse === 'By Truck' && (
+                                                                        <td className="p-5 text-right text-[9px] leading-tight">
+                                                                            <div className="text-purple-600">Ins: ₹{n2(item.insurance, true)}</div>
+                                                                            <div className="text-purple-600">Car: ₹{n2(item.cartage, true)}</div>
+                                                                            <div className="text-purple-600">Lod: ₹{n2(item.loading, true)}</div>
+                                                                        </td>
+                                                                    )}
+                                                                    {activeTab === 'out' && <td className="p-5 text-right text-rose-500">-₹{n2(item.discount, true)}</td>}
+                                                                    {activeTab !== 'transfer' && <td className="p-5 text-right font-black">₹{n2(item.total, true)}</td>}
+                                                                    {activeTab === 'out' && Number(formData.freight) > 0 && <td className="p-5 text-right text-cyan-600 font-black">₹{n2(freightDistribution[item.id] || 0, true)}</td>}
+                                                                    <td className="p-5 text-center"><button onClick={() => removeItem(item.id)} className="bg-rose-50 text-rose-500 font-black text-[9px] px-3 py-1 rounded-full hover:bg-rose-500 hover:text-white transition">Delete</button></td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                        <tfoot className="grand-total-bar text-white font-black uppercase text-sm italic">
+                                                            <tr>
+                                                                <td className="p-5">TOTAL ROWS: {orderItems.length}</td>
+                                                                <td className="p-5 text-center border-l border-slate-700 text-blue-400">{n2(grandTotals.qty)} <span className="text-[9px]">ITEMS</span></td>
+                                                                {activeTab !== 'transfer' ? (
+                                                                    <>
+                                                                        <td className="p-5 text-right" colSpan={activeTab === 'out' || (activeTab === 'in' && formData.warehouse === 'By Truck') ? 2 : 1}>Payable:</td>
+                                                                        <td className="p-5 text-right text-emerald-400 text-lg">₹{n2(grandTotals.amount, true)}</td>
+                                                                    </>
+                                                                ) : (
+                                                                    <td colSpan={2}></td>
+                                                                )}
+                                                                {activeTab === 'out' && Number(formData.freight) > 0 && <td className="p-5 text-right text-cyan-400">₹{n2(formData.freight, true)}</td>}
+                                                                <td className="p-5"></td>
+                                                            </tr>
+                                                        </tfoot>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {orderItems.length > 0 && (
+                                            <button onClick={() => handleSubmit(activeTab === 'in' ? 'STOCK_IN' : activeTab === 'out' ? 'STOCK_OUT' : 'TRANSFER')} disabled={btnLoad.saveTxn} className={`w-full p-6 bg-blue-600 text-white rounded-[2rem] font-black shadow-[0_20px_40px_rgba(37,99,235,0.4)] uppercase transition-all hover:bg-blue-700 hover:-translate-y-1 tracking-widest h-[80px] text-lg disabled:opacity-60 ${btnLoad.saveTxn ? 'btn-spin' : ''}`}>
+                                                {btnLoad.saveTxn ? "SAVING TRANSACTION..." : "SAVE TRANSACTION"}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ── HISTORY ── */}
+                            {activeTab === 'history' && (
+                                <div className="max-w-6xl mx-auto space-y-6">
+                                    <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-800 text-center">Stock History</h1>
+                                    <div className="bg-white p-10 rounded-[3rem] shadow-2xl border border-slate-100 space-y-8 text-center flex flex-col items-center">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-lg">
+                                            <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">From Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl border-2 border-blue-100 font-bold text-lg text-center shadow-inner outline-none focus:ring-2 focus:ring-blue-500" value={historyFromDate} onChange={e => setHistoryFromDate(e.target.value)} /></div>
+                                            <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">To Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl border-2 border-emerald-100 font-bold text-lg text-center shadow-inner outline-none focus:ring-2 focus:ring-emerald-500" value={historyToDate} onChange={e => setHistoryToDate(e.target.value)} /></div>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2 justify-center">
+                                            {[
+                                                { label: 'Today', fn: () => { const t = new Date().toISOString().split('T')[0]; setHistoryFromDate(t); setHistoryToDate(t); } },
+                                                { label: 'Last 7 Days', fn: () => { const t = new Date(); const f = new Date(t); f.setDate(t.getDate() - 7); setHistoryFromDate(f.toISOString().split('T')[0]); setHistoryToDate(t.toISOString().split('T')[0]); } },
+                                                { label: 'Last 30 Days', fn: () => { const t = new Date(); const f = new Date(t); f.setDate(t.getDate() - 30); setHistoryFromDate(f.toISOString().split('T')[0]); setHistoryToDate(t.toISOString().split('T')[0]); } },
+                                                { label: 'This Month', fn: () => { const t = new Date(); setHistoryFromDate(new Date(t.getFullYear(), t.getMonth(), 1).toISOString().split('T')[0]); setHistoryToDate(t.toISOString().split('T')[0]); } },
+                                            ].map(q => (<button key={q.label} onClick={q.fn} className="px-4 py-2 bg-slate-100 hover:bg-slate-900 hover:text-white rounded-xl text-[10px] font-black uppercase transition">{q.label}</button>))}
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full">
+                                            <button onClick={() => fetchHistoryRange('Purchase History', 'PurchaseLog', 'histPurchase')} disabled={btnLoad.histPurchase} className={`p-6 bg-blue-600 text-white rounded-[2rem] font-black shadow-lg hover:bg-black transition uppercase disabled:opacity-60 ${btnLoad.histPurchase ? 'btn-spin' : ''}`}>{btnLoad.histPurchase ? 'Loading...' : 'View Purchases'}</button>
+                                            <button onClick={() => fetchHistoryRange('Sales History', 'SalesLog', 'histSales')} disabled={btnLoad.histSales} className={`p-6 bg-emerald-600 text-white rounded-[2rem] font-black shadow-lg hover:bg-black transition uppercase disabled:opacity-60 ${btnLoad.histSales ? 'btn-spin' : ''}`}>{btnLoad.histSales ? 'Loading...' : 'View Sales'}</button>
+                                            <button onClick={() => fetchHistoryRange('Transfer History', 'TransferLog', 'histTransfer')} disabled={btnLoad.histTransfer} className={`p-6 bg-orange-600 text-white rounded-[2rem] font-black shadow-lg hover:bg-black transition uppercase disabled:opacity-60 ${btnLoad.histTransfer ? 'btn-spin' : ''}`}>{btnLoad.histTransfer ? 'Loading...' : 'View Transfers'}</button>
+                                        </div>
+                                    </div>
+                                    {logModal.show && (
+                                        <div className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-xl">
+                                            <div className="bg-slate-900 p-5 px-8 flex flex-wrap justify-between items-center gap-3">
+                                                <h3 className="text-white font-black italic tracking-widest uppercase text-sm">{logModal.title} <span className="text-blue-400 ml-2">({logModal.data.length} records)</span></h3>
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={downloadExcelCSV} disabled={btnLoad.dlCsv} className={`text-white bg-emerald-600 px-4 py-2 rounded-full text-[10px] font-black hover:bg-emerald-800 transition shadow-lg disabled:opacity-60 ${btnLoad.dlCsv ? 'btn-spin' : ''}`}>{btnLoad.dlCsv ? '...' : 'Download Excel ⬇'}</button>
+                                                    <button onClick={downloadPDF} disabled={btnLoad.dlPdf} className={`text-white bg-blue-600 px-4 py-2 rounded-full text-[10px] font-black hover:bg-blue-800 transition shadow-lg disabled:opacity-60 ${btnLoad.dlPdf ? 'btn-spin' : ''}`}>{btnLoad.dlPdf ? '...' : 'Download PDF 🖨'}</button>
+                                                    <button onClick={() => setLogModal({ ...logModal, show: false })} className="text-white bg-rose-500 px-3 py-2 rounded-full text-xs font-bold">Close ×</button>
+                                                </div>
+                                            </div>
+                                            <div className="scroll-top-table">
+                                                <table className="w-full text-left text-[10px] font-bold uppercase">
+                                                    <thead className="bg-slate-50 text-slate-400 font-black"><tr>{logModalColumns.map(h => <th key={h} className="p-4 whitespace-nowrap">{h}</th>)}</tr></thead>
+                                                    <tbody className="divide-y divide-slate-100">{logModal.data.length > 0 ? logModal.data.map((row, i) => (<tr key={i} className="hover:bg-blue-50 transition">{logModalColumns.map((h, j) => <td key={j} className="p-4 whitespace-nowrap">{row[h] !== undefined && row[h] !== null && row[h] !== "" ? fmtCell(row[h]) : "-"}</td>)}</tr>)) : (<tr><td colSpan="15" className="p-20 text-center font-black text-slate-300 italic tracking-widest text-xl">No Records Found</td></tr>)}</tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* ── MODIFY ── */}
+                            {activeTab === 'modify' && (
+                                <div className="max-w-6xl mx-auto space-y-6">
+                                    <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-800 text-center">Modify Records</h1>
+                                    <div className="bg-amber-50 border-2 border-dashed border-amber-200 rounded-2xl p-4 text-center">
+                                        <p className="text-[11px] font-black text-amber-700 uppercase tracking-wider">Search by Party Name, Product Name, Date Range, or any combination</p>
+                                    </div>
+                                    <div className="bg-white p-8 rounded-[3rem] shadow-2xl border border-slate-100 space-y-6">
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Select Log</label>
+                                                <select className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifySheet} onChange={e => { setModifySheet(e.target.value); setModifyParty(''); setModifyProduct(''); setModifyResults([]); setEditingRow(null); setModifyFromDate(''); setModifyToDate(''); }}>
+                                                    <option value="SalesLog">Sales Log</option>
+                                                    <option value="PurchaseLog">Purchase Log</option>
+                                                    <option value="TransferLog">Transfer Log</option>
+                                                </select>
+                                            </div>
+                                            <div className="space-y-1 relative">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase ml-2">
+                                                    {modifySheet === 'TransferLog' ? 'From/To Location' : modifySheet === 'PurchaseLog' ? 'Mill Name' : 'Party Name'} <span className="text-blue-500">(optional)</span>
+                                                </label>
+                                                <input className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner uppercase" placeholder={modifySheet === 'TransferLog' ? 'Type location...' : modifySheet === 'PurchaseLog' ? 'Type mill...' : 'Type party...'} value={modifyParty} autoComplete="off"
+                                                    onChange={e => { setModifyParty(e.target.value); setShowModifyPartyDD(true); }}
+                                                    onFocus={() => { if (modifyParty.length > 0) setShowModifyPartyDD(true); }}
+                                                    onBlur={() => setTimeout(() => setShowModifyPartyDD(false), 200)} />
+                                                {showModifyPartyDD && (
+                                                    <div className="dropdown-list">
+                                                        {parties.filter(p => !modifyParty || p.toString().toLowerCase().includes(modifyParty.toLowerCase())).slice(0, 15).map((p, i) => (<div key={i} onMouseDown={() => { setModifyParty(p.toString()); setShowModifyPartyDD(false); }}>{p}</div>))}
+                                                        {parties.filter(p => !modifyParty || p.toString().toLowerCase().includes(modifyParty.toLowerCase())).length === 0 && (<div style={{ color: '#94a3b8' }}>Koi result nahi</div>)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="space-y-1 relative">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Product Name <span className="text-blue-500">(optional)</span></label>
+                                                <input className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner uppercase" placeholder="Type product..." value={modifyProduct} autoComplete="off"
+                                                    onChange={e => { setModifyProduct(e.target.value); setShowModifyProductDD(true); }}
+                                                    onFocus={() => { if (modifyProduct.length > 0) setShowModifyProductDD(true); }}
+                                                    onBlur={() => setTimeout(() => setShowModifyProductDD(false), 200)} />
+                                                {showModifyProductDD && (
+                                                    <div className="dropdown-list">
+                                                        {sheetProducts.filter(p => !modifyProduct || p.toString().toLowerCase().includes(modifyProduct.toLowerCase())).slice(0, 15).map((p, i) => (<div key={i} onMouseDown={() => { setModifyProduct(p); setShowModifyProductDD(false); }}>{p}</div>))}
+                                                        {sheetProducts.filter(p => !modifyProduct || p.toString().toLowerCase().includes(modifyProduct.toLowerCase())).length === 0 && (<div style={{ color: '#94a3b8' }}>Koi result nahi</div>)}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">From Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyFromDate} onChange={e => setModifyFromDate(e.target.value)} /></div>
+                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">To Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyToDate} onChange={e => setModifyToDate(e.target.value)} /></div>
+                                            <div className="md:col-span-3 flex flex-wrap gap-1 items-end pb-1">
+                                                {[
+                                                    { label: 'Today', fn: () => { const t = new Date().toISOString().split('T')[0]; setModifyFromDate(t); setModifyToDate(t); } },
+                                                    { label: '7 Days', fn: () => { const t = new Date(); const f = new Date(t); f.setDate(t.getDate() - 7); setModifyFromDate(f.toISOString().split('T')[0]); setModifyToDate(t.toISOString().split('T')[0]); } },
+                                                    { label: '30 Days', fn: () => { const t = new Date(); const f = new Date(t); f.setDate(t.getDate() - 30); setModifyFromDate(f.toISOString().split('T')[0]); setModifyToDate(t.toISOString().split('T')[0]); } },
+                                                    { label: 'Clear', fn: () => { setModifyFromDate(''); setModifyToDate(''); } },
+                                                ].map(q => <button key={q.label} onClick={q.fn} className="px-3 py-2 bg-slate-100 hover:bg-slate-900 hover:text-white rounded-xl text-[9px] font-black uppercase transition">{q.label}</button>)}
+                                            </div>
+                                            <div className="md:col-span-3">
+                                                <button onClick={handleModifySearch} disabled={btnLoad.modifySearch} className={`w-full p-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg hover:bg-black transition tracking-widest text-sm disabled:opacity-60 ${btnLoad.modifySearch ? 'btn-spin' : ''}`}>
+                                                    {btnLoad.modifySearch ? 'Searching...' : 'Search 🔍'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {modifyResults.length > 0 && (
+                                        <div ref={modifyResultsRef} className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-xl">
+                                            <div className="bg-slate-900 p-5 px-8 flex justify-between items-center">
+                                                <h3 className="text-white font-black italic tracking-widest uppercase text-sm">Search Results ({modifyResults.length} records)</h3>
+                                                <button onClick={() => { setModifyResults([]); setEditingRow(null); }} className="text-white bg-rose-500 px-3 py-1 rounded-full text-xs font-bold">Clear ×</button>
+                                            </div>
+                                            {editingRow && (
+                                                <div className="bg-amber-50 border-b border-amber-200 px-8 py-3 flex flex-wrap gap-4 items-center">
+                                                    {modifySheet === 'SalesLog' && <p className="text-[10px] font-black text-amber-700 uppercase tracking-wider">🧮 Auto-Calc: Amount = Qty × Rate − Discount</p>}
+                                                    {modifySheet === 'PurchaseLog' && <p className="text-[10px] font-black text-amber-700 uppercase tracking-wider">🧮 Auto-Calc: Amount = Qty × Price</p>}
+                                                </div>
+                                            )}
+                                            {modifySheet === 'SalesLog' && Object.keys(modifyGroupInfo).length > 0 && (
+                                                <div className="bg-blue-50 border-b border-blue-200 px-8 py-3">
+                                                    <p className="text-[10px] font-black text-blue-700 uppercase tracking-wider">🔗 Colored rows ek hi sale ki entries hain — stock alag cost-price batches se nikla tha (FIFO), isliye 2+ rows mein split hua hai. Edit/Delete har row apni qty/rate ke hisaab se karein.</p>
+                                                </div>
+                                            )}
+                                            <div className="scroll-top-table">
+                                                <table className="w-full text-left text-[10px] font-bold uppercase">
+                                                    <thead className="bg-slate-50 text-slate-400 font-black">
+                                                        <tr>
+                                                            {modifySheet === 'SalesLog' && <th className="p-4 whitespace-nowrap">Transaction</th>}
+                                                            {modifyResultColumns.map(h => <th key={h} className="p-4 whitespace-nowrap">{h}</th>)}
+                                                            <th className="p-4 text-center sticky right-0 bg-slate-50">Actions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100">
+                                                        {modifyResults.map((row, i) => {
+                                                            const isEditing = editingRow && editingRow._sheetRow === row._sheetRow && editingRow._sheetName === row._sheetName;
+                                                            const grpInfo = modifyGroupInfo[i];
+                                                            const isGrouped = !!grpInfo;
+                                                            const groupColors = ['border-l-blue-400 bg-blue-50/30', 'border-l-emerald-400 bg-emerald-50/30', 'border-l-purple-400 bg-purple-50/30', 'border-l-orange-400 bg-orange-50/30', 'border-l-pink-400 bg-pink-50/30'];
+                                                            const groupColorClass = isGrouped ? groupColors[grpInfo.groupIdx % groupColors.length] : '';
+                                                            return (
+                                                                <tr key={i} className={`transition ${isEditing ? 'bg-amber-50' : isGrouped ? `hover:brightness-95 border-l-4 ${groupColorClass}` : 'hover:bg-blue-50'}`}>
+                                                                    {modifySheet === 'SalesLog' && (
+                                                                        <td className="p-3 whitespace-nowrap">
+                                                                            {isGrouped ? (
+                                                                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[9px] font-black bg-white border-2 border-current" title="Ek hi sale ka split — alag cost-price batches se">
+                                                                                    🔗 Split {grpInfo.part}/{grpInfo.total}
+                                                                                </span>
+                                                                            ) : (
+                                                                                <span className="text-slate-300">—</span>
+                                                                            )}
+                                                                        </td>
+                                                                    )}
+                                                                    {modifyResultColumns.map((key, j) => {
+                                                                        const hasField = Object.prototype.hasOwnProperty.call(row, key);
+                                                                        const val = row[key];
+                                                                        return (
+                                                                        <td key={j} className="p-3 whitespace-nowrap min-w-[100px]">
+                                                                            {!hasField ? (<span className="text-slate-300">–</span>) : isEditing && key !== 'Date' ? (() => {
+                                                                                if (['Warehouse', 'From', 'To'].includes(key)) return (<select className="w-full min-w-[140px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)}><option value="">-- Select --</option>{WAREHOUSES.map(w => <option key={w} value={w}>{w}</option>)}</select>);
+                                                                                if (key === 'Bill Type' || key === 'BillType') return (<select className="w-full min-w-[110px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)}><option value="GST">GST</option><option value="NON-GST">NON-GST</option></select>);
+                                                                                if (key === 'Sales Person') return (<select className="w-full min-w-[150px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)}><option value="">-- Select --</option>{SALES_PERSONS.map(s => <option key={s} value={s}>{s}</option>)}</select>);
+                                                                                if (key === 'Recovered?') return (<select className="w-full min-w-[80px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)}><option value="No">No</option><option value="Yes">Yes</option></select>);
+                                                                                if (key === 'Party Name') return (
+                                                                                    <div className="relative min-w-[180px]">
+                                                                                        <input className="w-full p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white uppercase" value={editValues[key] !== undefined ? editValues[key] : val} autoComplete="off" onChange={e => { handleEditValueChange(key, e.target.value.toUpperCase()); setShowEditPartyDD(true); }} onFocus={() => setShowEditPartyDD(true)} onBlur={() => setTimeout(() => setShowEditPartyDD(false), 300)} placeholder="Party search..." />
+                                                                                        {showEditPartyDD && (<div className="absolute left-0 top-full mt-1 w-60 bg-white border-2 border-blue-500 rounded-xl shadow-2xl z-[9999] max-h-44 overflow-y-auto">{parties.filter(p => !(editValues[key]) || p.toString().toLowerCase().includes((editValues[key] || '').toLowerCase())).slice(0, 12).map((p, pi) => (<div key={pi} onMouseDown={(e) => { e.preventDefault(); handleEditValueChange(key, p.toString().toUpperCase()); setShowEditPartyDD(false); }} className="px-3 py-2 cursor-pointer hover:bg-blue-600 hover:text-white border-b font-bold text-[10px] uppercase">{p}</div>))}</div>)}
+                                                                                    </div>
+                                                                                );
+                                                                                if (key === 'Mills' || key === 'Mill') return (
+                                                                                    <div className="relative min-w-[150px]">
+                                                                                        <input className="w-full p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white uppercase" value={editValues[key] !== undefined ? editValues[key] : val} autoComplete="off" onChange={e => { handleEditValueChange(key, e.target.value); setShowEditMillDD(true); }} onFocus={() => setShowEditMillDD(true)} onBlur={() => setTimeout(() => setShowEditMillDD(false), 300)} placeholder="Mill search..." />
+                                                                                        {showEditMillDD && (<div className="absolute left-0 top-full mt-1 w-56 bg-white border-2 border-blue-500 rounded-xl shadow-2xl z-[9999] max-h-44 overflow-y-auto">{[...new Set(masterItems.map(m => m.mill))].filter(m => !(editValues[key]) || m.toLowerCase().includes((editValues[key] || '').toLowerCase())).slice(0, 12).map((m, mi) => (<div key={mi} onMouseDown={(e) => { e.preventDefault(); handleEditValueChange(key, m); setShowEditMillDD(false); }} className="px-3 py-2 cursor-pointer hover:bg-blue-600 hover:text-white border-b font-bold text-[10px] uppercase">{m}</div>))}</div>)}
+                                                                                    </div>
+                                                                                );
+                                                                                if (key === 'Product') return (
+                                                                                    <div className="relative min-w-[200px]">
+                                                                                        <input className="w-full p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white uppercase" value={editValues[key] !== undefined ? editValues[key] : val} autoComplete="off" onChange={e => { handleEditValueChange(key, e.target.value); setShowEditProductDD(true); }} onFocus={() => setShowEditProductDD(true)} onBlur={() => setTimeout(() => setShowEditProductDD(false), 300)} placeholder="Product search..." />
+                                                                                        {showEditProductDD && (<div className="absolute left-0 top-full mt-1 w-72 bg-white border-2 border-blue-500 rounded-xl shadow-2xl z-[9999] max-h-44 overflow-y-auto">{masterItems.filter(m => !(editValues[key]) || m.name.toLowerCase().includes((editValues[key] || '').toLowerCase())).slice(0, 12).map((m, mi) => (<div key={mi} onMouseDown={(e) => { e.preventDefault(); handleEditValueChange(key, m.name); const millColKey = row._sheetName.startsWith('SalesLog') ? 'Mills' : 'Mill'; handleEditValueChange(millColKey, m.mill); setShowEditProductDD(false); }} className="px-3 py-2 cursor-pointer hover:bg-blue-600 hover:text-white border-b font-bold text-[10px] uppercase"><p>{m.name}</p><p className="opacity-50 text-[9px] normal-case">{m.mill}</p></div>))}</div>)}
+                                                                                    </div>
+                                                                                );
+                                                                                if (isAutoCalcField(key) || key === 'Cost Price' || key === 'Profit') return (<input className="w-full min-w-[90px] p-2 border-2 border-slate-200 rounded-lg font-bold text-[10px] bg-slate-50 text-slate-400 cursor-not-allowed" value={editValues[key] !== undefined ? editValues[key] : val} readOnly title="Auto-calculated" />);
+                                                                                return (<input className="w-full min-w-[80px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)} />);
+                                                                            })() : (<span className="text-slate-700">{val !== undefined && val !== null && val !== "" ? fmtCell(val) : "-"}</span>)}
+                                                                        </td>
+                                                                        );
+                                                                    })}
+                                                                    <td className="p-3 whitespace-nowrap text-center sticky right-0 bg-white border-l border-slate-100">
+                                                                        <div className="flex items-center justify-center gap-2">
+                                                                            {isEditing ? (
+                                                                                <>
+                                                                                    <button onClick={saveEdit} disabled={btnLoad.saveEdit} className={`bg-emerald-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-emerald-700 transition disabled:opacity-60 ${btnLoad.saveEdit ? 'btn-spin' : ''}`}>{btnLoad.saveEdit ? '...' : 'Save ✓'}</button>
+                                                                                    <button onClick={() => setEditingRow(null)} className="bg-slate-400 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-slate-600 transition">Cancel</button>
+                                                                                </>
+                                                                            ) : (
+                                                                                <>
+                                                                                    <button onClick={() => startEditing(row)} className="bg-amber-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-amber-700 transition">Edit ✏️</button>
+                                                                                    <button onClick={() => deleteEntry(row)} className="bg-rose-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-rose-700 transition">Delete 🗑️</button>
+                                                                                </>
+                                                                            )}
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* ── STOCK BOOK ── */}
+                            {activeTab === 'report' && (
+                                <div className="max-w-7xl mx-auto space-y-6">
+                                    <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-800 text-center">📜 Stock Book</h1>
+                                    <div className="bg-white p-6 rounded-[2rem] shadow-lg border border-slate-100">
+                                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                                            <div className="md:col-span-2 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">From Date</label><input type="date" className="w-full p-3 bg-slate-50 rounded-xl font-bold border" value={repFilters.from} onChange={e => setRepFilters({ ...repFilters, from: e.target.value })} /></div>
+                                            <div className="md:col-span-2 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">To Date</label><input type="date" className="w-full p-3 bg-slate-50 rounded-xl font-bold border" value={repFilters.to} onChange={e => setRepFilters({ ...repFilters, to: e.target.value })} /></div>
+                                            <div className="md:col-span-2 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Warehouse</label><select className="w-full p-3 bg-slate-50 rounded-xl font-bold border" value={repFilters.wh} onChange={e => setRepFilters({ ...repFilters, wh: e.target.value })}><option value="All">All</option>{WAREHOUSES.map(wh => <option key={wh} value={wh}>{wh}</option>)}</select></div>
+                                            <div className="md:col-span-3 space-y-1 relative">
+                                                <label className="text-[10px] font-black text-blue-500 uppercase ml-2 italic">Select Product for Ledger</label>
+                                                <input placeholder="Search Item..." className="w-full p-3 bg-blue-50 rounded-xl font-bold border-2 border-blue-100 outline-none focus:border-blue-500 uppercase" value={searchQuery} onChange={e => { setSearchQuery(e.target.value); setShowResults(true); }} />
+                                                {showResults && filteredItems.length > 0 && (
+                                                    <div className="absolute w-full mt-2 bg-white border-2 border-blue-600 rounded-2xl shadow-2xl z-[9999] max-h-60 overflow-y-auto text-[11px]">
+                                                        {filteredItems.map((item, i) => (<div key={i} onClick={() => { setFormData({ ...formData, mill: item.mill, product: item.name }); setSearchQuery(item.label); setShowResults(false); }} className="p-3 hover:bg-blue-600 hover:text-white cursor-pointer border-b uppercase font-bold">{item.label}</div>))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="md:col-span-3 flex gap-2">
+                                                <button onClick={fetchTallyReport} disabled={btnLoad.summary} className={`flex-1 p-3 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-black transition disabled:opacity-60 ${btnLoad.summary ? 'btn-spin' : ''}`}>{btnLoad.summary ? '...' : 'Summary'}</button>
+                                                <button onClick={fetchLedger} disabled={btnLoad.ledger} className={`flex-1 p-3 bg-orange-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-black transition disabled:opacity-60 ${btnLoad.ledger ? 'btn-spin' : ''}`}>{btnLoad.ledger ? '...' : 'Ledger'}</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {reportData.length > 0 && (
+                                        <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-2xl">
+                                            <div className="bg-[#1e293b] p-5 px-8 flex justify-between items-center text-white flex-wrap gap-2">
+                                                <h3 className="font-black italic tracking-widest uppercase text-sm">Stock Summary <span className="text-blue-400">({reportData.length} products)</span></h3>
+                                                <div className="flex gap-2">
+                                                    <button onClick={downloadStockReportExcel} disabled={btnLoad.dlSummary} className={`bg-emerald-600 text-white px-4 py-1 rounded-full text-[10px] font-black uppercase shadow-lg disabled:opacity-60 ${btnLoad.dlSummary ? 'btn-spin' : ''}`}>{btnLoad.dlSummary ? '...' : 'Download Excel ⬇'}</button>
+                                                    <button onClick={() => setReportData([])} className="bg-rose-500 text-white px-3 py-1 rounded-full text-xs font-bold">Clear ×</button>
+                                                </div>
+                                            </div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-left border-collapse text-[11px] font-bold uppercase">
+                                                    <thead className="bg-slate-100 text-slate-500 font-black">
+                                                        <tr>
+                                                            <th className="p-4 border">Mill & Product</th>
+                                                            <th className="p-4 border text-center bg-slate-200 text-slate-700">Opening Qty</th>
+                                                            <th className="p-4 border text-center bg-emerald-100 text-emerald-700">Inwards (In)</th>
+                                                            <th className="p-4 border text-center bg-rose-100 text-rose-700">Outwards (Out)</th>
+                                                            <th className="p-4 border text-center bg-blue-100 text-blue-700">Closing Qty</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100">
+                                                        {reportData.map((row, idx) => (
+                                                            <tr key={idx} className="hover:bg-blue-50/50 transition">
+                                                                <td className="p-4 border font-bold"><p className="text-[9px] text-slate-400 mb-0.5 leading-none">{row.mill}</p>{row.product}</td>
+                                                                <td className="p-4 text-center border text-slate-600">{n2(row.opQty)}</td>
+                                                                <td className="p-4 text-center border text-emerald-600">+{n2(row.inQty)}</td>
+                                                                <td className="p-4 text-center border text-rose-600">-{n2(row.outQty)}</td>
+                                                                <td className="p-4 text-center border text-blue-800 font-black text-sm">{n2(row.clQty)}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {ledgerData.length > 0 && (
+                                        <div className="bg-white rounded-[2.5rem] border-2 border-orange-200 overflow-hidden shadow-2xl mt-8">
+                                            <div className="bg-orange-600 p-5 px-8 flex justify-between items-center text-white flex-wrap gap-2">
+                                                <div>
+                                                    <h3 className="font-black italic tracking-widest uppercase text-sm">📒 Daily Stock Ledger — Date Wise</h3>
+                                                    <p className="text-[10px] font-bold opacity-90 mt-1">{formData.mill} — {formData.product}  |  {repFilters.from} to {repFilters.to}  |  WH: {repFilters.wh}</p>
+                                                </div>
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <button onClick={downloadLedgerCSV} className="bg-emerald-700 hover:bg-emerald-900 text-white px-3 py-1.5 rounded-full text-[10px] font-black uppercase shadow-lg">Excel Workbook ⬇</button>
+                                                    <button onClick={downloadLedgerPDF} disabled={btnLoad.dlLedger} className={`bg-blue-700 hover:bg-blue-900 text-white px-3 py-1.5 rounded-full text-[10px] font-black uppercase shadow-lg disabled:opacity-60 ${btnLoad.dlLedger ? 'btn-spin' : ''}`}>{btnLoad.dlLedger ? '...' : 'PDF 🖨'}</button>
+                                                    <button onClick={() => setLedgerData([])} className="bg-white/20 hover:bg-white/40 text-white px-3 py-1.5 rounded-full text-[10px] font-black uppercase">Clear ×</button>
+                                                </div>
+                                            </div>
+                                            <div className="p-6 space-y-6">
+                                                {Object.keys(groupedLedger).sort().map((dKey, dIdx) => {
+                                                    const block = groupedLedger[dKey];
+                                                    return (
+                                                        <div key={dIdx} className="border-2 border-slate-200 rounded-2xl overflow-hidden shadow">
+                                                            <div className="wh-group-header flex items-center justify-between"><span>📅 {block.date}</span><span className="text-[10px] opacity-80">{Object.keys(block.warehouses).length} Warehouse(s)</span></div>
+                                                            {Object.keys(block.warehouses).map((wh, wIdx) => {
+                                                                const rows = block.warehouses[wh];
+                                                                return (
+                                                                    <div key={wIdx} className="border-t border-slate-200">
+                                                                        <div className="bg-blue-50 px-5 py-2 border-l-4 border-blue-600"><span className="text-[11px] font-black text-blue-900 uppercase tracking-wider">🏬 {wh}</span></div>
+                                                                        <table className="w-full text-left border-collapse text-[11px] font-bold uppercase">
+                                                                            <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-500">
+                                                                                <tr><th className="p-3 border-b text-center">Opening Qty</th><th className="p-3 border-b text-center bg-emerald-50">Inward (+)</th><th className="p-3 border-b text-center bg-rose-50">Outward (-)</th><th className="p-3 border-b text-center bg-blue-50">Closing Qty</th></tr>
+                                                                            </thead>
+                                                                            <tbody>
+                                                                                {rows.map((r, rIdx) => (<tr key={rIdx} className="hover:bg-orange-50/30 transition"><td className="p-3 text-center text-slate-500">{n2(r.opQty)}</td><td className="p-3 text-center text-emerald-600 bg-emerald-50/30">+{n2(r.inQty)}</td><td className="p-3 text-center text-rose-600 bg-rose-50/30">-{n2(r.outQty)}</td><td className="p-3 text-center text-blue-900 font-black bg-blue-50/40">{n2(r.clQty)}</td></tr>))}
+                                                                            </tbody>
+                                                                        </table>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* ── GLOBAL SEARCH ── */}
+                            {activeTab === 'search' && (
+                                <div className="max-w-5xl mx-auto space-y-6">
+                                    <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-800">🔍 Search All Logs</h1>
+                                    <div className="bg-white p-6 rounded-[2rem] shadow-lg border border-slate-100">
+                                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                                            <div className="md:col-span-8 space-y-1">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Search Party, Product, Mill, Bill No...</label>
+                                                <div className="relative">
+                                                    <input className="w-full p-4 bg-slate-50 rounded-2xl font-bold border-2 border-blue-100 outline-none focus:border-blue-500 text-lg" placeholder="Type anything to search across all logs..." value={globalSearch} autoComplete="off"
+                                                        onChange={e => { setGlobalSearch(e.target.value); setShowGlobalDD(true); }}
+                                                        onFocus={() => setShowGlobalDD(true)}
+                                                        onBlur={() => setTimeout(() => setShowGlobalDD(false), 200)}
+                                                        onKeyDown={e => {
+                                                            if (e.key === 'Enter') {
+                                                                if (!globalSearch.trim()) return;
+                                                                setGlobalLoading(true); setGlobalResults([]);
+                                                                if (typeof google !== 'undefined') {
+                                                                    const sheets = ['SalesLog', 'PurchaseLog', 'TransferLog'];
+                                                                    let done = 0, allResults = [];
+                                                                    sheets.forEach(sheet => {
+                                                                        google.script.run
+                                                                            .withSuccessHandler(res => {
+                                                                                try { const data = JSON.parse(res); data.forEach(row => { row._sheet = sheet; }); allResults = [...allResults, ...data]; } catch(e) {}
+                                                                                done++;
+                                                                                if (done === sheets.length) { setGlobalResults(allResults); setGlobalLoading(false); if (allResults.length === 0) Toast.fire({ icon: 'info', title: 'No record found!' }); }
+                                                                            })
+                                                                            .withFailureHandler(() => { done++; if (done === sheets.length) { setGlobalResults(allResults); setGlobalLoading(false); } })
+                                                                            .searchRecords(sheet, globalSearch, globalSearch, '', '');
+                                                                    });
+                                                                }
+                                                            }
+                                                        }} />
+                                                    {showGlobalDD && globalSearch.length >= 1 && (
+                                                        <div className="absolute w-full mt-1 bg-white border-2 border-blue-500 rounded-2xl shadow-2xl z-[9999] max-h-56 overflow-y-auto">
+                                                            {parties.filter(p => p.toString().toLowerCase().includes(globalSearch.toLowerCase())).slice(0, 4).map((p, i) => (<div key={'p' + i} onMouseDown={() => { setGlobalSearch(p.toString()); setShowGlobalDD(false); }} className="px-4 py-2.5 cursor-pointer hover:bg-blue-600 hover:text-white border-b border-slate-100 flex items-center gap-3"><span className="text-[9px] font-black px-2 py-0.5 bg-blue-100 text-blue-700 rounded-lg">PARTY</span><span className="font-black text-[11px] uppercase">{p}</span></div>))}
+                                                            {masterItems.filter(m => m.label.toLowerCase().includes(globalSearch.toLowerCase())).slice(0, 5).map((m, i) => (<div key={'m' + i} onMouseDown={() => { setGlobalSearch(m.name); setShowGlobalDD(false); }} className="px-4 py-2.5 cursor-pointer hover:bg-blue-600 hover:text-white border-b border-slate-100 flex items-center gap-3"><span className="text-[9px] font-black px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-lg">PRODUCT</span><div><p className="font-black text-[11px] uppercase">{m.name}</p><p className="text-[9px] opacity-60">{m.mill}</p></div></div>))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="md:col-span-4">
+                                                <button disabled={globalLoading} onClick={() => {
+                                                    if (!globalSearch.trim()) return Toast.fire({ icon: 'warning', title: 'Kuch toh likho!' });
+                                                    setGlobalLoading(true); setGlobalResults([]);
+                                                    if (typeof google !== 'undefined') {
+                                                        const sheets = ['SalesLog', 'PurchaseLog', 'TransferLog'];
+                                                        let done = 0, allResults = [];
+                                                        sheets.forEach(sheet => {
+                                                            google.script.run
+                                                                .withSuccessHandler(res => {
+                                                                    try { const data = JSON.parse(res); data.forEach(row => { row._sheet = sheet; }); allResults = [...allResults, ...data]; } catch(e) {}
+                                                                    done++;
+                                                                    if (done === sheets.length) { setGlobalResults(allResults); setGlobalLoading(false); if (allResults.length === 0) Toast.fire({ icon: 'info', title: 'No record found!' }); }
+                                                                })
+                                                                .withFailureHandler(() => { done++; if (done === sheets.length) { setGlobalResults(allResults); setGlobalLoading(false); } })
+                                                                .searchRecords(sheet, globalSearch, globalSearch, '', '');
+                                                        });
+                                                    }
+                                                }} className={`w-full p-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg hover:bg-black transition text-sm disabled:opacity-60 ${globalLoading ? 'btn-spin' : ''}`}>
+                                                    {globalLoading ? 'Searching...' : 'Search 🔍'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {globalResults.length > 0 && (
+                                        <div className="space-y-4">
+                                            {['SalesLog', 'PurchaseLog', 'TransferLog'].map(sheet => {
+                                                const sheetRows = globalResults.filter(r => r._sheet === sheet);
+                                                if (sheetRows.length === 0) return null;
+                                                const headers = Array.from(sheetRows.reduce((set, r) => { Object.keys(r).forEach(k => { if (!k.startsWith('_')) set.add(k); }); return set; }, new Set()));
+                                                const colors = { SalesLog: 'bg-emerald-600', PurchaseLog: 'bg-blue-600', TransferLog: 'bg-orange-600' };
+                                                const labels = { SalesLog: '📤 Sales Log', PurchaseLog: '📥 Purchase Log', TransferLog: '🔄 Transfer Log' };
+                                                return (
+                                                    <div key={sheet} className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden shadow-lg">
+                                                        <div className={`${colors[sheet]} p-4 px-6 flex flex-wrap justify-between items-center gap-2 text-white`}>
+                                                            <h3 className="font-black uppercase tracking-widest text-sm">{labels[sheet]}</h3>
+                                                            <button onClick={() => { let csv = headers.join(',') + '\n'; sheetRows.forEach(row => { csv += headers.map(h => { const v = fmtCell(row[h]); return '"' + (v !== undefined && v !== null ? String(v).replace(/"/g, '""') : '') + '"'; }).join(',') + '\n'; }); const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = sheet + '.csv'; a.click(); }} className="px-3 py-1 bg-white/20 hover:bg-white/40 rounded-full text-[9px] font-black uppercase transition">Excel ⬇</button>
+                                                        </div>
+                                                        <div className="scroll-top-table">
+                                                            <table className="w-full text-left text-[10px] font-bold uppercase">
+                                                                <thead className="bg-slate-50 text-slate-400 font-black"><tr>{headers.map(h => <th key={h} className="p-3 whitespace-nowrap">{h}</th>)}</tr></thead>
+                                                                <tbody className="divide-y divide-slate-100">{sheetRows.map((row, i) => (<tr key={i} className="hover:bg-blue-50 transition">{headers.map((h, j) => <td key={j} className="p-3 whitespace-nowrap">{row[h] !== undefined && row[h] !== null ? fmtCell(row[h]) : '-'}</td>)}</tr>))}</tbody>
+                                                            </table>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* ── PARTY REPORT ── */}
+                            {activeTab === 'partyreport' && (
+                                <div className="max-w-5xl mx-auto space-y-6">
+                                    <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-800">👤 Party-wise Sales Report</h1>
+                                    <div className="bg-white p-6 rounded-[2rem] shadow-lg border border-slate-100">
+                                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">From Date</label><input type="date" className="w-full p-3 bg-slate-50 rounded-xl font-bold border" value={partyRepFilters.from} onChange={e => setPartyRepFilters({ ...partyRepFilters, from: e.target.value })} /></div>
+                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">To Date</label><input type="date" className="w-full p-3 bg-slate-50 rounded-xl font-bold border" value={partyRepFilters.to} onChange={e => setPartyRepFilters({ ...partyRepFilters, to: e.target.value })} /></div>
+                                            <div className="md:col-span-3 space-y-1">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Party Name (optional)</label>
+                                                <div className="relative">
+                                                    <input className="w-full p-3 bg-slate-50 rounded-xl font-bold border uppercase outline-none focus:border-blue-500" placeholder="All parties..." value={partyRepFilters.party}
+                                                        onChange={e => { setPartyRepFilters({ ...partyRepFilters, party: e.target.value.toUpperCase() }); setShowPartyRepDD(true); }}
+                                                        onFocus={() => setShowPartyRepDD(true)} onBlur={() => setTimeout(() => setShowPartyRepDD(false), 200)} />
+                                                    {showPartyRepDD && parties.length > 0 && (
+                                                        <div className="absolute w-full mt-1 bg-white border-2 border-blue-500 rounded-xl shadow-2xl z-[9999] max-h-48 overflow-y-auto">
+                                                            {parties.filter(p => p.toString().toLowerCase().includes(partyRepFilters.party.toLowerCase())).slice(0, 12).map((p, i) => (<div key={i} onMouseDown={() => { setPartyRepFilters({ ...partyRepFilters, party: p.toString().toUpperCase() }); setShowPartyRepDD(false); }} className="px-4 py-2.5 cursor-pointer hover:bg-blue-600 hover:text-white border-b font-black text-[11px] uppercase">{p}</div>))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="md:col-span-3">
+                                                <button disabled={partyRepLoading} onClick={() => {
+                                                    setPartyRepLoading(true); setPartyReport([]);
+                                                    if (typeof google !== 'undefined') {
+                                                        google.script.run.withSuccessHandler(res => {
+                                                            try {
+                                                                const data = JSON.parse(res);
+                                                                const partyKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase().replace(/\s/g, '').includes('partyname') || k.toLowerCase() === 'party') : null;
+                                                                const qtyKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'qty' || k.toLowerCase() === 'quantity') : 'Qty';
+                                                                const amtKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'amount') : 'Amount';
+                                                                const profitKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'profit') : 'Profit';
+                                                                const grouped = {};
+                                                                data.forEach(row => {
+                                                                    const party = (partyKey ? row[partyKey] : null) || 'Unknown';
+                                                                    if (!grouped[party]) grouped[party] = { party, totalQty: 0, totalAmt: 0, totalProfit: 0, bills: 0 };
+                                                                    grouped[party].totalQty += Number(qtyKey ? row[qtyKey] : 0) || 0;
+                                                                    grouped[party].totalAmt += Number(amtKey ? row[amtKey] : 0) || 0;
+                                                                    grouped[party].totalProfit += Number(profitKey ? row[profitKey] : 0) || 0;
+                                                                    grouped[party].bills++;
+                                                                });
+                                                                setPartyReport(Object.values(grouped).sort((a, b) => b.totalAmt - a.totalAmt));
+                                                            } catch(e) {}
+                                                            setPartyRepLoading(false);
+                                                        }).withFailureHandler(err => { setPartyRepLoading(false); Toast.fire({ icon: 'error', title: err.message }); }).searchRecords('SalesLog', partyRepFilters.party, '', partyRepFilters.from, partyRepFilters.to);
+                                                    }
+                                                }} className={`w-full p-3 bg-blue-600 text-white rounded-xl font-black uppercase shadow-lg text-sm ${partyRepLoading ? 'btn-spin' : ''}`}>
+                                                    {partyRepLoading ? 'Loading...' : 'Load Report 📊'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {partyReport.length > 0 && (
+                                        <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden shadow-xl">
+                                            <div className="bg-slate-900 p-4 px-8 flex justify-between items-center flex-wrap gap-2">
+                                                <h3 className="text-white font-black italic tracking-widest uppercase text-sm">Party Report <span className="text-blue-400">({partyReport.length} parties)</span></h3>
+                                                <button onClick={downloadPartyReportExcel} className="bg-emerald-600 hover:bg-emerald-800 text-white px-4 py-1.5 rounded-full text-[10px] font-black uppercase shadow-lg transition">Download Excel ⬇</button>
+                                            </div>
+                                            <div className="scroll-top-table">
+                                                <table className="w-full text-left text-[11px] font-bold uppercase border-collapse">
+                                                    <thead className="bg-slate-50 text-slate-400 text-[9px] font-black">
+                                                        <tr><th className="p-4">#</th><th>Party Name</th><th className="text-center">Bills</th><th className="text-center">Total Qty</th><th className="text-right">Total Amount</th><th className="text-right">Total Profit</th></tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100">
+                                                        {partyReport.map((p, i) => (
+                                                            <tr key={i} className="hover:bg-blue-50/40 transition">
+                                                                <td className="p-4 text-slate-400 font-black">{i + 1}</td>
+                                                                <td className="p-4 font-black text-slate-800">{p.party}</td>
+                                                                <td className="p-4 text-center">{p.bills}</td>
+                                                                <td className="p-4 text-center text-blue-600">{n2(p.totalQty)}</td>
+                                                                <td className="p-4 text-right">₹{n2(p.totalAmt, true)}</td>
+                                                                <td className={`p-4 text-right ${p.totalProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>₹{n2(p.totalProfit, true)}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                        </main>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
