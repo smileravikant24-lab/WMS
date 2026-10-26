@@ -863,7 +863,7 @@ function processData(payload) {
           const tLog = ss.getSheetByName('TransferLog');
           if (tLog) {
             const td = tLog.getDataRange().getValues(), th = td[0].map(x => String(x||'').trim().toLowerCase());
-            const t_mi = th.indexOf('mill') !== -1 ? h.indexOf('mill') : th.indexOf('mills');
+            const t_mi = th.indexOf('mill') !== -1 ? th.indexOf('mill') : th.indexOf('mills');
             const t_pi = th.indexOf('product'), t_qi = th.indexOf('qty');
             let t_rateI = th.indexOf('rate');
             if (t_rateI === -1) t_rateI = th.indexOf('avg price');
