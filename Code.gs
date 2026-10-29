@@ -1004,6 +1004,19 @@ function processData(payload) {
         const currentQty = Number(vals[0]) || 0, itemQty = Number(item.qty);
         if (itemQty <= 0) throw new Error(`Invalid qty for ${item.product}`);
         if (currentQty < itemQty) throw new Error(`Stock kam hai: ${item.product} (available: ${currentQty})`);
+
+        const p = Number(item.price) || Number(item.rate) || 0;
+        if (p <= 0) throw new Error(`Price/Rate missing: "${item.product}" ka rate nahi hai! Bina price ke save nahi hoga.`);
+
+        const bType = String(item.billType || '').toUpperCase().replace(/[-\s]/g, '');
+        if (bType.includes('NON')) {
+          const masterNonGst = Number(vals[2]) || 0;
+          const passedCP = Number(item.costPrice) || 0;
+          if (masterNonGst <= 0 && passedCP <= 0) {
+            throw new Error(`Net Cost Price missing: "${item.product}" ka Net Cost Price MasterStock me nahi hai!`);
+          }
+        }
+
         validatedItems.push({ item, row, currentQty, avgGST: Number(vals[1]) || 0, avgNonGST: Number(vals[2]) || 0, itemQty });
       });
 
@@ -1040,28 +1053,32 @@ function processData(payload) {
 
         if (remainingSaleQty > 0.001) {
           let fallbackCP = 0;
-          const pLogFB = ss.getSheetByName(`PurchaseLog_${data.warehouse}`);
-          if (pLogFB) {
-            const pd = pLogFB.getDataRange().getValues(), ph = pd[0].map(x => String(x||'').trim().toLowerCase());
-            const pMi = ph.indexOf('mills') !== -1 ? ph.indexOf('mills') : ph.indexOf('mill');
-            const pPi = ph.indexOf('product'), pQi = ph.indexOf('qty'), pRi = ph.indexOf('price');
-            const pTi = ph.indexOf('bill type') !== -1 ? ph.indexOf('bill type') : ph.indexOf('type');
-            let sum = 0, qtyTotal = 0;
-            for (let i = 1; i < pd.length; i++) {
-              if (!ciEquals(pd[i][pMi], item.mill) || !ciEquals(pd[i][pPi], item.product)) continue;
-              const q = Number(pd[i][pQi]) || 0;
-              if (q <= 0) continue;
-              const typeIsNon = String(pd[i][pTi]||'').toUpperCase().replace(/[-\s]/g,'').includes('NON');
-              if (typeIsNon === billTypeRaw.includes('NON')) { sum += (Number(pd[i][pRi])||0) * q; qtyTotal += q; }
-            }
-            fallbackCP = qtyTotal > 0 ? sum / qtyTotal : (billTypeRaw.includes('NON') ? avgNonGST : avgGST);
+          if (billTypeRaw.includes('NON') && Number(item.costPrice) > 0) {
+            fallbackCP = Number(item.costPrice);
           } else {
-            fallbackCP = billTypeRaw.includes('NON') ? avgNonGST : avgGST;
+            const pLogFB = ss.getSheetByName(`PurchaseLog_${data.warehouse}`);
+            if (pLogFB) {
+              const pd = pLogFB.getDataRange().getValues(), ph = pd[0].map(x => String(x||'').trim().toLowerCase());
+              const pMi = ph.indexOf('mills') !== -1 ? ph.indexOf('mills') : ph.indexOf('mill');
+              const pPi = ph.indexOf('product'), pQi = ph.indexOf('qty'), pRi = ph.indexOf('price');
+              const pTi = ph.indexOf('bill type') !== -1 ? ph.indexOf('bill type') : ph.indexOf('type');
+              let sum = 0, qtyTotal = 0;
+              for (let i = 1; i < pd.length; i++) {
+                if (!ciEquals(pd[i][pMi], item.mill) || !ciEquals(pd[i][pPi], item.product)) continue;
+                const q = Number(pd[i][pQi]) || 0;
+                if (q <= 0) continue;
+                const typeIsNon = String(pd[i][pTi]||'').toUpperCase().replace(/[-\s]/g,'').includes('NON');
+                if (typeIsNon === billTypeRaw.includes('NON')) { sum += (Number(pd[i][pRi])||0) * q; qtyTotal += q; }
+              }
+              fallbackCP = qtyTotal > 0 ? sum / qtyTotal : (billTypeRaw.includes('NON') ? (avgNonGST || Number(item.costPrice) || 0) : avgGST);
+            } else {
+              fallbackCP = billTypeRaw.includes('NON') ? (avgNonGST || Number(item.costPrice) || 0) : avgGST;
+            }
           }
           splitRows.push({ qty: remainingSaleQty, costPrice: fallbackCP, extras: 0 });
         }
         if (splitRows.length === 0) {
-          const fallback = billTypeRaw.includes('NON') ? avgNonGST : avgGST;
+          const fallback = billTypeRaw.includes('NON') ? (avgNonGST || Number(item.costPrice) || 0) : avgGST;
           splitRows.push({ qty: itemQty, costPrice: fallback, extras: 0 });
         }
 
@@ -1155,6 +1172,7 @@ function processData(payload) {
       data.items.forEach(item => {
         const itemBillType = item.billType || data.billType;
         const addedQty = Number(item.qty) || 0, buyPrice = Number(item.price) || 0;
+        if (buyPrice <= 0 && addedQty > 0) throw new Error(`Price missing: "${item.product}" ka purchase price bharna zaroori hai! Bina price ke save nahi hoga.`);
         if (buyPrice < 0) throw new Error(`Invalid price for ${item.product}`);
         if (addedQty < 0) throw new Error(`Invalid qty for ${item.product}`);
         const amt = addedQty * buyPrice;

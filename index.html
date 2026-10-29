@@ -521,7 +521,21 @@
             const saveNetRateToMaster = (mill, product, warehouse, netRate) => {
                 if (typeof google === 'undefined') return;
                 const payload = { action: 'STOCK_IN', date: formData.date, warehouse: warehouse, billType: 'NON-GST', items: [{ mill, product, qty: 0, price: netRate, billType: 'NON-GST', unit: 'Ream' }] };
-                google.script.run.withSuccessHandler(() => Toast.fire({ icon: 'success', title: '✅ Rate saved to Master!' })).withFailureHandler(err => Toast.fire({ icon: 'error', title: err.message })).processData(JSON.stringify(payload));
+                google.script.run
+                    .withSuccessHandler(() => {
+                        Toast.fire({ icon: 'success', title: '✅ Net Rate Master me save ho gaya!' });
+                        setDashData(prev => ({
+                            ...prev,
+                            items: prev.items.map(i => {
+                                if (ciEquals(i.warehouse, warehouse) && ciEquals(i.product, product) && millMatches(i.mill, mill)) {
+                                    return { ...i, avgNonGST: netRate };
+                                }
+                                return i;
+                            })
+                        }));
+                    })
+                    .withFailureHandler(err => Toast.fire({ icon: 'error', title: err.message }))
+                    .processData(JSON.stringify(payload));
             };
 
             // ── Add item to order list ───────────────────────────────────────────
@@ -540,41 +554,73 @@
                     return;
                 }
 
-                // NET mode (Stock Out NON-GST)
+                // RATE VALIDATION: Price cannot be empty or 0
+                const enteredPrice = Number(formData.price) || 0;
+                if (enteredPrice <= 0) {
+                    return Swal.fire({
+                        icon: 'error',
+                        title: isNetMode ? 'Net Rate Missing!' : 'Price/Rate Missing!',
+                        text: `⚠️ ${formData.product} ka ${isNetMode ? 'Net Rate' : 'Rate'} bharna zaroori hai! Bina price ke item add nahi ho sakta.`
+                    });
+                }
+
+                // NET mode (Stock Out NON-GST) - Check Net Cost Price
                 if (isNetMode && activeTab === 'out') {
-                    const salePrice = Number(formData.price) || 0;
-                    if (salePrice <= 0) return Toast.fire({ icon: 'error', title: 'Enter Net Rate!' });
+                    const salePrice = enteredPrice;
                     const existingCostPrice = Number(itemStats.avgNonGST) || 0;
                     if (existingCostPrice === 0) {
                         Swal.fire({
-                            title: '💰 Cost Price (Net)',
-                            html: `<div style="text-align:left;font-size:13px;margin-bottom:12px;color:#444"><b style="color:#1a5c2a">${formData.mill} — ${formData.product}</b><br><br><div style="display:flex;justify-content:space-between;background:#f0f5ec;padding:10px;border-radius:8px;margin-bottom:8px"><span style="color:#666">Sale Price:</span><b style="color:#1a5c2a">₹${salePrice}</b></div><span style="color:#d97706;font-size:12px">⚠️ Is product ka Cost Price saved nahi hai. MasterStock update ke liye daale:</span></div><input id="swal-cost-price" class="swal2-input" type="number" placeholder="Cost Price (₹)" min="1" style="font-size:18px;font-weight:700;text-align:center;border:2px solid #d97706">`,
-                            confirmButtonText: '✅ Save Cost & Add',
-                            confirmButtonColor: '#1a5c2a',
+                            title: '💰 Net Cost Price Missing in Master!',
+                            html: `<div style="text-align:left;font-size:13px;margin-bottom:12px;color:#444">
+                                <b style="color:#1a5c2a;font-size:15px">${formData.mill} — ${formData.product}</b><br><br>
+                                <div style="background:#fef3c7;border:1px solid #f59e0b;padding:10px;border-radius:10px;margin-bottom:10px;color:#92400e;font-size:12px">
+                                    ⚠️ <b>Is product ka Net Cost Price Master me saved nahi hai!</b><br>
+                                    Bina Net Price save kiye entry save nahi hogi. Pehle is item ka Net Cost Price daal kar save karein:
+                                </div>
+                                <div style="display:flex;justify-content:space-between;background:#f0fdf4;padding:8px 12px;border-radius:8px;margin-bottom:8px">
+                                    <span style="color:#666">Sale Price:</span><b style="color:#16a34a;font-size:15px">₹${salePrice}</b>
+                                </div>
+                            </div>
+                            <input id="swal-cost-price" class="swal2-input" type="number" step="0.01" placeholder="Net Cost Price (₹)" min="1" style="font-size:18px;font-weight:800;text-align:center;border:2px solid #d97706">`,
+                            confirmButtonText: '💾 Save Cost & Add Item',
+                            confirmButtonColor: '#16a34a',
                             showCancelButton: true,
-                            cancelButtonText: '✕ Close',
-                            cancelButtonColor: '#94a3b8',
-                            allowOutsideClick: true,
-                            allowEscapeKey: true,
+                            cancelButtonText: '✕ Cancel',
+                            cancelButtonColor: '#dc2626',
+                            allowOutsideClick: false,
+                            allowEscapeKey: false,
                             focusConfirm: false,
                             background: '#fffbeb',
-                            preConfirm: () => { const val = Number(document.getElementById('swal-cost-price').value); if (!val || val <= 0) { Swal.showValidationMessage('Cost Price daalna zaroori hai!'); return false; } return val; }
+                            preConfirm: () => {
+                                const val = Number(document.getElementById('swal-cost-price').value);
+                                if (!val || val <= 0) {
+                                    Swal.showValidationMessage('Cost Price daalna compulsory hai!');
+                                    return false;
+                                }
+                                return val;
+                            }
                         }).then(result => {
-                            if (!result.isConfirmed) return;
-                            saveNetRateToMaster(formData.mill, formData.product, formData.warehouse, result.value);
+                            if (!result.isConfirmed || !result.value) {
+                                return Swal.fire({
+                                    icon: 'warning',
+                                    title: 'Entry Cancelled',
+                                    text: '⚠️ Bina Net Cost Price save kiye yeh item add nahi kiya ja sakta!'
+                                });
+                            }
+                            const costVal = Number(result.value);
+                            saveNetRateToMaster(formData.mill, formData.product, formData.warehouse, costVal);
                             const total = (Number(formData.qty) || 0) * salePrice;
-                            const newItem = { ...formData, id: Date.now(), total, billType: 'NON-GST', rate: formData.price };
+                            const newItem = { ...formData, id: Date.now(), total, billType: 'NON-GST', rate: formData.price, costPrice: costVal };
                             setOrderItems(prev => [...prev, newItem]);
                             setFormData({ ...formData, product: '', mill: '', price: '', qty: '', discount: '0', insurance: '0', cartage: '0', loading: '0' });
                             setSearchQuery('');
-                            Toast.fire({ icon: 'success', title: '🟡 Added + Cost Saved!' });
+                            Toast.fire({ icon: 'success', title: '🟡 Added + Net Cost Saved!' });
                         });
                         return;
                     }
                 }
 
                 // Normal Stock In / Stock Out
-                if (!formData.price || Number(formData.price) <= 0) return Toast.fire({ icon: 'error', title: 'Price zaroori hai!' });
                 const newItem = { ...formData, id: Date.now(), total: currentTotal, rate: formData.price };
                 setOrderItems([...orderItems, newItem]);
                 setFormData({ ...formData, product: '', mill: '', price: '', qty: '', discount: '0', insurance: '0', cartage: '0', loading: '0' });
@@ -589,6 +635,33 @@
                 if (action === 'STOCK_OUT' && (!formData.padNo || !formData.partyName || !formData.salesPerson)) return Toast.fire({ icon: 'warning', title: 'Party, Pad No & Sales Person Must!' });
                 if (action === 'TRANSFER' && (!formData.toWarehouse || formData.warehouse === formData.toWarehouse)) return Toast.fire({ icon: 'warning', title: 'Invalid Destination!' });
                 if (orderItems.length === 0) return Toast.fire({ icon: 'error', title: 'Add atleast 1 item!' });
+
+                // ── STRICT PRICE VALIDATION ──────────────────────────────────────────
+                for (const itm of orderItems) {
+                    const itmPrice = Number(itm.price) || Number(itm.rate) || 0;
+                    if (itmPrice <= 0) {
+                        return Swal.fire({
+                            icon: 'error',
+                            title: 'Rate/Price Missing!',
+                            text: `❌ "${itm.product}" ka price/rate missing ya 0 hai! Bina price ke entry save nahi ho sakti.`
+                        });
+                    }
+
+                    // Net Mode (NON-GST Stock Out) - Verify Cost Price
+                    if (action === 'STOCK_OUT' && itm.billType === 'NON-GST') {
+                        const directCP = Number(itm.costPrice) || 0;
+                        const masterProduct = dashData.items.find(i => ciEquals(i.warehouse, formData.warehouse) && ciEquals(i.product, itm.product) && millMatches(i.mill, itm.mill));
+                        const masterCP = masterProduct ? (Number(masterProduct.avgNonGST) || 0) : 0;
+                        if (directCP <= 0 && masterCP <= 0) {
+                            return Swal.fire({
+                                icon: 'error',
+                                title: 'Net Cost Price Missing!',
+                                text: `❌ "${itm.product}" ka Net Cost Price MasterStock me nahi hai! Is item ka Net Price save karein tabhi entry hogi.`
+                            });
+                        }
+                    }
+                }
+
                 setBtn('saveTxn', true);
                 const effectiveBillNo = isNetMode ? (formData.netBillNo || '') : formData.billNo;
                 const payload = {
