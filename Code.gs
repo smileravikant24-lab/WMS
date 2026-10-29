@@ -143,6 +143,7 @@ function onOpen() {
     SpreadsheetApp.getUi()
       .createMenu('🛠 WMS Tools')
       .addItem('✅ Health Check (Master vs Logs)', 'showHealthCheck')
+      .addItem('⚡ Quick Reset 0-Stock Prices (Instant)', 'resetZeroStockPrices')
       .addSeparator()
       .addItem('📍 Rebuild Mukherjee Nagar Only', 'rebuildMukherjeeNagarOnly')
       .addItem('📍 Rebuild Khera Kalan Only', 'rebuildKheraKalanOnly')
@@ -151,6 +152,30 @@ function onOpen() {
       .addItem('🔁 Full Rebuild Master (All Warehouses)', 'rebuildAllMaster')
       .addToUi();
   } catch (e) {}
+}
+
+function resetZeroStockPrices() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const master = ss.getSheetByName('MasterStock');
+  if (!master || master.getLastRow() <= 1) return;
+  const data = master.getDataRange().getValues();
+  let count = 0;
+  for (let i = 1; i < data.length; i++) {
+    const qty = Number(data[i][3]) || 0;
+    if (qty <= 0.001) {
+      if (Number(data[i][3]) !== 0 || Number(data[i][4]) !== 0 || Number(data[i][5]) !== 0 || Number(data[i][6]) !== 0) {
+        data[i][3] = 0;
+        data[i][4] = 0;
+        data[i][5] = 0;
+        data[i][6] = 0;
+        count++;
+      }
+    }
+  }
+  if (count > 0) {
+    master.getRange(1, 1, data.length, data[0].length).setValues(data);
+  }
+  ss.toast(`✅ ${count} products (0 stock) ke prices reset ho gaye!`, 'Instant Reset Complete', 5);
 }
 
 function showHealthCheck() {
@@ -298,20 +323,31 @@ function _doFullRebuild(ss) {
 
   const seen = {}, uniqueCombos = [];
   combos.forEach(key => { const lk = key.toLowerCase(); if (!seen[lk]) { seen[lk] = true; uniqueCombos.push(key); } });
-  uniqueCombos.forEach(key => { const [m, p, w] = key.split('||'); recomputeMasterFromLogs(ss, m, p, w); recalcSalesLogProfit(ss, m, p, w); });
+
+  // Pre-load AuditLog once to prevent timeout from hundreds of sheet reads
+  const auditTimeMap = getAuditTimeMap(ss);
+
+  uniqueCombos.forEach(key => {
+    const [m, p, w] = key.split('||');
+    recomputeMasterFromLogs(ss, m, p, w, auditTimeMap);
+  });
+
+  // Batch-recalc SalesLog profit once per warehouse instead of per combo
+  WAREHOUSES.forEach(wh => recalcSalesLogProfit(ss, null, null, wh));
+
   return uniqueCombos.length;
 }
 
-function recomputeMasterFromLogs(ss, mill, product, warehouse) {
+function recomputeMasterFromLogs(ss, mill, product, warehouse, auditTimeMap = null) {
   const wh = (warehouse || '').toString().toLowerCase().trim();
   if (wh.includes('khera')) {
-    return recomputeMasterKheraKalan(ss, mill, product);
+    return recomputeMasterKheraKalan(ss, mill, product, auditTimeMap);
   } else if (wh.includes('mukherjee')) {
-    return recomputeMasterMukherjeeNagar(ss, mill, product);
+    return recomputeMasterMukherjeeNagar(ss, mill, product, auditTimeMap);
   } else if (wh.includes('truck')) {
-    return recomputeMasterByTruck(ss, mill, product);
+    return recomputeMasterByTruck(ss, mill, product, auditTimeMap);
   } else {
-    return recomputeMasterKheraKalan(ss, mill, product);
+    return recomputeMasterKheraKalan(ss, mill, product, auditTimeMap);
   }
 }
 
@@ -335,10 +371,10 @@ function getAuditTimeMap(ss) {
   return auditTimeMap;
 }
 
-function recomputeMasterMukherjeeNagar(ss, mill, product) {
+function recomputeMasterMukherjeeNagar(ss, mill, product, cachedAuditMap = null) {
   const warehouse = "Mukherjee Nagar";
   const master = getOrCreateSheet(ss, 'MasterStock', ['Mill','Product','Warehouse','Total Qty','Avg_GST','Avg_NonGST','Total Value','Unit']);
-  const auditTimeMap = getAuditTimeMap(ss);
+  const auditTimeMap = cachedAuditMap || getAuditTimeMap(ss);
   const events = [];
   let lastKnownUnit = 'Ream';
   let seq = 0;
@@ -433,10 +469,10 @@ function recomputeMasterMukherjeeNagar(ss, mill, product) {
   _processAndWriteToMaster(master, mill, product, warehouse, events, lastKnownUnit, rateSetGST, rateSetNonGST);
 }
 
-function recomputeMasterKheraKalan(ss, mill, product) {
+function recomputeMasterKheraKalan(ss, mill, product, cachedAuditMap = null) {
   const warehouse = "Khera Kalan";
   const master = getOrCreateSheet(ss, 'MasterStock', ['Mill','Product','Warehouse','Total Qty','Avg_GST','Avg_NonGST','Total Value','Unit']);
-  const auditTimeMap = getAuditTimeMap(ss);
+  const auditTimeMap = cachedAuditMap || getAuditTimeMap(ss);
   const events = [];
   let lastKnownUnit = 'Ream';
   let seq = 0;
@@ -531,10 +567,10 @@ function recomputeMasterKheraKalan(ss, mill, product) {
   _processAndWriteToMaster(master, mill, product, warehouse, events, lastKnownUnit, rateSetGST, rateSetNonGST);
 }
 
-function recomputeMasterByTruck(ss, mill, product) {
+function recomputeMasterByTruck(ss, mill, product, cachedAuditMap = null) {
   const warehouse = "By Truck";
   const master = getOrCreateSheet(ss, 'MasterStock', ['Mill','Product','Warehouse','Total Qty','Avg_GST','Avg_NonGST','Total Value','Unit']);
-  const auditTimeMap = getAuditTimeMap(ss);
+  const auditTimeMap = cachedAuditMap || getAuditTimeMap(ss);
   const events = [];
   let lastKnownUnit = 'Ream';
   let seq = 0;
@@ -636,51 +672,41 @@ function _processAndWriteToMaster(master, mill, product, warehouse, events, last
   });
 
   let runningQty = 0;
-  let avgGST = 0;
-  let avgNonGST = 0;
-  let lastGstRate = 0;
-  let lastNonGstRate = 0;
+  let gstSum = 0, gstQty = 0;
+  let nonGstSum = 0, nonGstQty = 0;
+  let lastGstRate = 0, lastNonGstRate = 0;
 
   for (const ev of events) {
     if (ev.type === 'IN') {
-      const prevQty = Math.max(0, runningQty);
-      runningQty += ev.qty;
-
-      if (ev.gstPrice > 0) {
-        lastGstRate = ev.gstPrice;
-        // Price tabhi average hoga jab tak stock 0 nahi hai (prevQty > 0 aur avgGST > 0)
-        // Agar pehle ka stock 0 tha, to purane rate se koi average nahi hoga — direct naya purchase price set hoga!
-        if (prevQty <= 0.001 || avgGST <= 0) {
-          avgGST = ev.gstPrice;
-        } else {
-          avgGST = Number(((prevQty * avgGST + ev.qty * ev.gstPrice) / (prevQty + ev.qty)).toFixed(2));
-        }
+      if (runningQty <= 0.001) {
+        gstSum = 0;
+        gstQty = 0;
+        nonGstSum = 0;
+        nonGstQty = 0;
       }
-
+      runningQty += ev.qty;
+      if (ev.gstPrice > 0) {
+        gstSum += ev.gstPrice * ev.qty;
+        gstQty += ev.qty;
+        lastGstRate = ev.gstPrice;
+      }
       if (ev.nonGstPrice > 0) {
+        nonGstSum += ev.nonGstPrice * ev.qty;
+        nonGstQty += ev.qty;
         lastNonGstRate = ev.nonGstPrice;
-        if (prevQty <= 0.001 || avgNonGST <= 0) {
-          avgNonGST = ev.nonGstPrice;
-        } else {
-          avgNonGST = Number(((prevQty * avgNonGST + ev.qty * ev.nonGstPrice) / (prevQty + ev.qty)).toFixed(2));
-        }
       }
     } else {
       runningQty -= ev.qty;
-      // Jaise hi stock 0 ya usse kam hota hai, price reset ho jata hai
-      if (runningQty <= 0.001) {
-        runningQty = 0;
-        avgGST = 0;
-        avgNonGST = 0;
-      }
     }
   }
 
   let finalQty = Math.max(0, Number(runningQty.toFixed(2)));
+  let avgGST = 0;
+  let avgNonGST = 0;
 
   if (finalQty > 0.001) {
-    if (avgGST <= 0 && (rateSetGST || lastGstRate)) avgGST = rateSetGST || lastGstRate;
-    if (avgNonGST <= 0 && (rateSetNonGST || lastNonGstRate)) avgNonGST = rateSetNonGST || lastNonGstRate;
+    avgGST = gstQty > 0 ? Number((gstSum / gstQty).toFixed(2)) : (rateSetGST || lastGstRate || 0);
+    avgNonGST = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (rateSetNonGST || lastNonGstRate || 0);
     avgGST = Number(avgGST.toFixed(2));
     avgNonGST = Number(avgNonGST.toFixed(2));
   } else {
@@ -753,11 +779,12 @@ function _rebuildSingleWarehouse(ss, warehouse, recomputeFn) {
     }
   }
 
+  const auditTimeMap = getAuditTimeMap(ss);
   combos.forEach(key => {
     const [m, p] = key.split('||');
-    recomputeFn(ss, m, p);
-    recalcSalesLogProfit(ss, m, p, warehouse);
+    recomputeFn(ss, m, p, auditTimeMap);
   });
+  recalcSalesLogProfit(ss, null, null, warehouse);
 }
 
 function recalcSalesLogProfit(ss, mill, product, warehouse) {
@@ -777,8 +804,28 @@ function recalcSalesLogProfit(ss, mill, product, warehouse) {
   const fi = h.indexOf('profit'), frIdx = h.indexOf('freight'), recIdx = h.indexOf('recovered?');
   if (fi === -1) return;
 
+  // Pre-load MasterStock into memory map
+  const masterMap = {};
+  if (master && master.getLastRow() > 1) {
+    const md = master.getDataRange().getValues();
+    for (let r = 1; r < md.length; r++) {
+      const m = (md[r][0] || '').toString().trim();
+      const p = (md[r][1] || '').toString().trim();
+      const w = (md[r][2] || '').toString().trim();
+      if (ciEquals(w, warehouse)) {
+        masterMap[ciKey(m, p, warehouse)] = {
+          baseGST: Number(md[r][4]) || 0,
+          baseNonGST: Number(md[r][5]) || 0
+        };
+      }
+    }
+  }
+
+  let hasUpdates = false;
+
   for (let i = 1; i < d.length; i++) {
-    if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+    if (mill && !ciEquals(d[i][mi], mill)) continue;
+    if (product && !ciEquals(d[i][pi], product)) continue;
 
     // ── FROZEN BUY PRICE CHECK ──────────────────────────────────────────
     // Stored buy price (Cost Price) on previous sales records must NEVER be
@@ -800,28 +847,29 @@ function recalcSalesLogProfit(ss, mill, product, warehouse) {
       const profit = Number((saleAmt - (qty * existingCP) - freightDeduction).toFixed(2));
       const currentProfit = Number(d[i][fi]);
       if (isNaN(currentProfit) || Math.abs(currentProfit - profit) > 0.01) {
-        sLog.getRange(i + 1, fi + 1).setValue(profit);
+        d[i][fi] = profit;
+        hasUpdates = true;
       }
       continue;
     }
 
-    // Only if Cost Price was completely empty/missing in this row, look up fallback once (only if master has price > 0)
-    let baseGST = 0, baseNonGST = 0;
-    if (master) {
-      const masterRow = findProductRowWithWarehouse(master, mill, product, warehouse);
-      if (masterRow > 0) {
-        const masterVals = master.getRange(masterRow, 4, 1, 3).getValues()[0];
-        baseGST    = Number(masterVals[1]) || 0;
-        baseNonGST = Number(masterVals[2]) || 0;
-      }
-    }
+    // Only if Cost Price was completely empty/missing in this row, look up fallback once from masterMap
+    const mInfo = masterMap[ciKey(d[i][mi], d[i][pi], warehouse)];
+    let baseGST = mInfo ? mInfo.baseGST : 0;
+    let baseNonGST = mInfo ? mInfo.baseNonGST : 0;
+
     const billType = String(d[i][ti] || '').toUpperCase().replace(/[-\s]/g, '');
     const costPrice = billType.includes('NON') ? baseNonGST : baseGST;
     if (costPrice <= 0) continue; // Never write 0 or overwrite with 0
 
     const profit = Number((saleAmt - (qty * costPrice) - freightDeduction).toFixed(2));
-    if (ci !== -1) sLog.getRange(i + 1, ci + 1).setValue(Number(costPrice.toFixed(2)));
-    sLog.getRange(i + 1, fi + 1).setValue(profit);
+    if (ci !== -1) d[i][ci] = Number(costPrice.toFixed(2));
+    d[i][fi] = profit;
+    hasUpdates = true;
+  }
+
+  if (hasUpdates) {
+    sLog.getRange(1, 1, d.length, d[0].length).setValues(d);
   }
 }
 
