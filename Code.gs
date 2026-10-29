@@ -636,41 +636,53 @@ function _processAndWriteToMaster(master, mill, product, warehouse, events, last
   });
 
   let runningQty = 0;
-  let gstSum = 0, gstQty = 0;
-  let nonGstSum = 0, nonGstQty = 0;
-  let lastGstRate = 0, lastNonGstRate = 0;
+  let avgGST = 0;
+  let avgNonGST = 0;
+  let lastGstRate = 0;
+  let lastNonGstRate = 0;
 
   for (const ev of events) {
     if (ev.type === 'IN') {
-      if (runningQty <= 0.001) {
-        gstSum = 0;
-        gstQty = 0;
-        nonGstSum = 0;
-        nonGstQty = 0;
-      }
+      const prevQty = Math.max(0, runningQty);
       runningQty += ev.qty;
+
       if (ev.gstPrice > 0) {
-        gstSum += ev.gstPrice * ev.qty;
-        gstQty += ev.qty;
         lastGstRate = ev.gstPrice;
+        // Price tabhi average hoga jab tak stock 0 nahi hai (prevQty > 0 aur avgGST > 0)
+        // Agar pehle ka stock 0 tha, to purane rate se koi average nahi hoga — direct naya purchase price set hoga!
+        if (prevQty <= 0.001 || avgGST <= 0) {
+          avgGST = ev.gstPrice;
+        } else {
+          avgGST = Number(((prevQty * avgGST + ev.qty * ev.gstPrice) / (prevQty + ev.qty)).toFixed(2));
+        }
       }
+
       if (ev.nonGstPrice > 0) {
-        nonGstSum += ev.nonGstPrice * ev.qty;
-        nonGstQty += ev.qty;
         lastNonGstRate = ev.nonGstPrice;
+        if (prevQty <= 0.001 || avgNonGST <= 0) {
+          avgNonGST = ev.nonGstPrice;
+        } else {
+          avgNonGST = Number(((prevQty * avgNonGST + ev.qty * ev.nonGstPrice) / (prevQty + ev.qty)).toFixed(2));
+        }
       }
     } else {
       runningQty -= ev.qty;
+      // Jaise hi stock 0 ya usse kam hota hai, price reset ho jata hai
+      if (runningQty <= 0.001) {
+        runningQty = 0;
+        avgGST = 0;
+        avgNonGST = 0;
+      }
     }
   }
 
   let finalQty = Math.max(0, Number(runningQty.toFixed(2)));
-  let avgGST = 0;
-  let avgNonGST = 0;
 
   if (finalQty > 0.001) {
-    avgGST = gstQty > 0 ? Number((gstSum / gstQty).toFixed(2)) : (rateSetGST || lastGstRate);
-    avgNonGST = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (rateSetNonGST || lastNonGstRate);
+    if (avgGST <= 0 && (rateSetGST || lastGstRate)) avgGST = rateSetGST || lastGstRate;
+    if (avgNonGST <= 0 && (rateSetNonGST || lastNonGstRate)) avgNonGST = rateSetNonGST || lastNonGstRate;
+    avgGST = Number(avgGST.toFixed(2));
+    avgNonGST = Number(avgNonGST.toFixed(2));
   } else {
     finalQty = 0;
     avgGST = 0;
