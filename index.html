@@ -49,17 +49,8 @@
 <body>
     <!-- GitHub Pages to Google Apps Script Bridge -->
     <script>
-        // =========================================================================
-        // ⚙️ GOOGLE APPS SCRIPT WEB APP URL
-        // Replace this URL with your deployed Google Apps Script Web App URL:
-        // Example: "https://script.google.com/macros/s/AKfycbx.../exec"
-        // =========================================================================
         const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzlacDY0a57_q_bnch1hLZRVIMX3l6-mcjwykdjes0dxLpmuWUcCOlZa-xGKwHm-mij/exec";
 
-        /**
-         * Universal executeGasCall function
-         * Maps google.script.run function names to Apps Script Web App GET / POST endpoints
-         */
         async function executeGasCall(funcName, args) {
             // Write actions: processData (STOCK_IN, STOCK_OUT, TRANSFER), updateRecord, deleteRecord
             if (funcName === 'processData') {
