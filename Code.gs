@@ -668,24 +668,13 @@ function _processAndWriteToMaster(master, mill, product, warehouse, events, last
   let avgGST = 0;
   let avgNonGST = 0;
 
-  if (warehouse === 'By Truck') {
-    if (finalQty > 0.001) {
-      avgGST = gstQty > 0 ? Number((gstSum / gstQty).toFixed(2)) : (rateSetGST || lastGstRate);
-      avgNonGST = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (rateSetNonGST || lastNonGstRate);
-    } else {
-      finalQty = 0;
-      avgGST = 0;
-      avgNonGST = 0;
-    }
+  if (finalQty > 0.001) {
+    avgGST = gstQty > 0 ? Number((gstSum / gstQty).toFixed(2)) : (rateSetGST || lastGstRate);
+    avgNonGST = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (rateSetNonGST || lastNonGstRate);
   } else {
-    if (finalQty > 0.001) {
-      avgGST = gstQty > 0 ? Number((gstSum / gstQty).toFixed(2)) : (rateSetGST || lastGstRate);
-      avgNonGST = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (rateSetNonGST || lastNonGstRate);
-    } else {
-      finalQty = 0;
-      avgGST = rateSetGST || lastGstRate || 0;
-      avgNonGST = rateSetNonGST || lastNonGstRate || 0;
-    }
+    finalQty = 0;
+    avgGST = 0;
+    avgNonGST = 0;
   }
 
   const effectiveAvg = avgGST > 0 ? avgGST : avgNonGST;
@@ -760,29 +749,30 @@ function _rebuildSingleWarehouse(ss, warehouse, recomputeFn) {
 }
 
 function recalcSalesLogProfit(ss, mill, product, warehouse) {
-  const sLog = ss.getSheetByName(`SalesLog_${warehouse}`), master = ss.getSheetByName('MasterStock');
-  if (!sLog || !master) return;
+  const sLog = ss.getSheetByName(`SalesLog_${warehouse}`);
+  if (!sLog) return;
+  const master = ss.getSheetByName('MasterStock');
 
-  let baseGST = 0, baseNonGST = 0;
-  const masterRow = findProductRowWithWarehouse(master, mill, product, warehouse);
-  if (masterRow > 0) {
-    const masterVals = master.getRange(masterRow, 4, 1, 3).getValues()[0];
-    baseGST    = Number(masterVals[1]) || 0;
-    baseNonGST = Number(masterVals[2]) || 0;
-  }
-
-  const d = sLog.getDataRange().getValues(), h = d[0].map(x => String(x || '').trim().toLowerCase());
+  const d = sLog.getDataRange().getValues();
+  if (d.length <= 1) return;
+  const h = d[0].map(x => String(x || '').trim().toLowerCase());
   const mi = h.indexOf('mills') !== -1 ? h.indexOf('mills') : h.indexOf('mill');
   const pi = h.indexOf('product'), qi = h.indexOf('qty'), ai = h.indexOf('amount'), ti = h.indexOf('bill type');
   const ri = h.indexOf('rate'), di = h.indexOf('discount');
-  const ci = h.indexOf('cost price'), fi = h.indexOf('profit'), frIdx = h.indexOf('freight'), recIdx = h.indexOf('recovered?');
+  let ci = h.indexOf('cost price');
+  if (ci === -1) ci = h.indexOf('buy price');
+  if (ci === -1) ci = h.indexOf('buying price');
+  const fi = h.indexOf('profit'), frIdx = h.indexOf('freight'), recIdx = h.indexOf('recovered?');
   if (fi === -1) return;
 
   for (let i = 1; i < d.length; i++) {
     if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
 
-    const existingCP = ci !== -1 ? (Number(d[i][ci]) || 0) : 0;
-    if (existingCP > 0) continue;
+    // ── FROZEN BUY PRICE CHECK ──────────────────────────────────────────
+    // Stored buy price (Cost Price) on previous sales records must NEVER be
+    // dynamically changed. Once saved, it remains 100% frozen.
+    const rawCP = ci !== -1 ? d[i][ci] : null;
+    const hasExistingCP = rawCP !== null && rawCP !== undefined && String(rawCP).trim() !== '' && !isNaN(Number(rawCP)) && Number(rawCP) > 0;
 
     const isRecovered = recIdx !== -1 && String(d[i][recIdx] || '').trim().toLowerCase() === 'yes';
     const freight = frIdx !== -1 ? (Number(d[i][frIdx]) || 0) : 0;
@@ -792,12 +782,32 @@ function recalcSalesLogProfit(ss, mill, product, warehouse) {
     let saleAmt = Number(d[i][ai]) || 0;
     if (saleAmt === 0 && qty > 0 && rate > 0) saleAmt = (qty * rate) - discount;
 
+    if (hasExistingCP) {
+      // Cost price is already frozen! Do NOT modify ci. Only ensure profit matches this frozen buy price if needed
+      const existingCP = Number(rawCP);
+      const profit = Number((saleAmt - (qty * existingCP) - freightDeduction).toFixed(2));
+      const currentProfit = Number(d[i][fi]);
+      if (isNaN(currentProfit) || Math.abs(currentProfit - profit) > 0.01) {
+        sLog.getRange(i + 1, fi + 1).setValue(profit);
+      }
+      continue;
+    }
+
+    // Only if Cost Price was completely empty/missing in this row, look up fallback once (only if master has price > 0)
+    let baseGST = 0, baseNonGST = 0;
+    if (master) {
+      const masterRow = findProductRowWithWarehouse(master, mill, product, warehouse);
+      if (masterRow > 0) {
+        const masterVals = master.getRange(masterRow, 4, 1, 3).getValues()[0];
+        baseGST    = Number(masterVals[1]) || 0;
+        baseNonGST = Number(masterVals[2]) || 0;
+      }
+    }
     const billType = String(d[i][ti] || '').toUpperCase().replace(/[-\s]/g, '');
     const costPrice = billType.includes('NON') ? baseNonGST : baseGST;
-    const profit = costPrice > 0
-      ? Number((saleAmt - (qty * costPrice) - freightDeduction).toFixed(2))
-      : Number((saleAmt - freightDeduction).toFixed(2));
+    if (costPrice <= 0) continue; // Never write 0 or overwrite with 0
 
+    const profit = Number((saleAmt - (qty * costPrice) - freightDeduction).toFixed(2));
     if (ci !== -1) sLog.getRange(i + 1, ci + 1).setValue(Number(costPrice.toFixed(2)));
     sLog.getRange(i + 1, fi + 1).setValue(profit);
   }
@@ -1002,8 +1012,12 @@ function processData(payload) {
         }
 
         let newQty = currentQty - itemQty;
-        if (newQty <= 0.001) { newQty = 0; }
         let finalAvgGST = avgGST, finalAvgNonGST = avgNonGST;
+        if (newQty <= 0.001) {
+          newQty = 0;
+          finalAvgGST = 0;
+          finalAvgNonGST = 0;
+        }
         let finalEffectiveAvg = finalAvgGST > 0 ? finalAvgGST : finalAvgNonGST;
         master.getRange(row, 4, 1, 4).setValues([[ Math.max(0, newQty), Number(finalAvgGST.toFixed(2)), Number(finalAvgNonGST.toFixed(2)), Number((Math.max(0, newQty) * finalEffectiveAvg).toFixed(2)) ]]);
 
@@ -1374,7 +1388,10 @@ function getDashboardData() {
   let items = [], grandTotal = 0;
   for (let i = 1; i < data.length; i++) {
     grandTotal += Number(data[i][6]) || 0;
-    items.push({ mill: data[i][0], product: data[i][1], warehouse: data[i][2], qty: data[i][3], avgGST: data[i][4], avgNonGST: data[i][5], totalVal: data[i][6], unit: data[i][7] });
+    const qty = Number(data[i][3]) || 0;
+    const avgGST = qty <= 0.001 ? 0 : (Number(data[i][4]) || 0);
+    const avgNonGST = qty <= 0.001 ? 0 : (Number(data[i][5]) || 0);
+    items.push({ mill: data[i][0], product: data[i][1], warehouse: data[i][2], qty: qty, avgGST: avgGST, avgNonGST: avgNonGST, totalVal: data[i][6], unit: data[i][7] });
   }
   return JSON.stringify({ items, totalValue: grandTotal });
 }
