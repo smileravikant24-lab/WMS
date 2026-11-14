@@ -200,6 +200,56 @@
 
         function fmtCell(v) { return typeof v === 'number' ? n2(v) : v; }
 
+        const reportHeaderKey = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const reportField = (row, aliases) => {
+            const keys = new Set(aliases.map(reportHeaderKey));
+            const header = Object.keys(row).find(key => keys.has(reportHeaderKey(key)));
+            return header ? row[header] : '';
+        };
+        const reportNumber = value => {
+            const text = String(value === undefined || value === null ? '' : value).trim();
+            const direct = Number(text);
+            if (Number.isFinite(direct)) return direct;
+            const parsed = Number(text.replace(/[^0-9.+-]/g, ''));
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+        const reportMonth = value => {
+            if (!value) return { key: 'undated', label: 'Undated' };
+            const text = String(value).trim();
+            const dayFirst = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+            const date = dayFirst
+                ? new Date(Number(dayFirst[3]), Number(dayFirst[2]) - 1, Number(dayFirst[1]))
+                : new Date(text);
+            if (!Number.isFinite(date.getTime())) return { key: 'undated', label: 'Undated' };
+            const year = date.getFullYear(), month = date.getMonth() + 1;
+            return {
+                key: `${year}-${String(month).padStart(2, '0')}`,
+                label: date.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+            };
+        };
+        const prepareSalesReportRow = row => {
+            const month = reportMonth(reportField(row, ['Date']));
+            const warehouse = reportField(row, ['Warehouse']) || String(row._sheetName || '').replace(/^SalesLog_/i, '');
+            const amount = reportNumber(reportField(row, ['Amount', 'Revenue']));
+            const profit = reportNumber(reportField(row, ['Profit', 'Gross Profit', 'Total GP']));
+            return {
+                ...row,
+                _reportMonthKey: month.key,
+                _reportMonth: month.label,
+                _reportWarehouse: String(warehouse || 'Unknown'),
+                _reportParty: String(reportField(row, ['Party Name', 'Party']) || 'Unknown'),
+                _reportSalesPerson: String(reportField(row, ['Sales Person']) || 'Unknown'),
+                _reportMill: String(reportField(row, ['Mills', 'Mill']) || 'Unknown'),
+                _reportProduct: String(reportField(row, ['Product']) || 'Unknown'),
+                _reportPO: String(reportField(row, ['PO No', 'PO Number', 'Purchase Order No']) || ''),
+                _reportBill: String(reportField(row, ['Bill No', 'Bill No.']) || ''),
+                _reportQty: reportNumber(reportField(row, ['Qty', 'Quantity'])),
+                _reportRevenue: amount,
+                _reportProfit: profit,
+                _reportVariableCost: amount - profit
+            };
+        };
+
         const Toast = Swal.mixin({
             toast: true, position: 'bottom', showConfirmButton: false, timer: 2500, timerProgressBar: true,
             background: '#0f172a', color: '#ffffff',
@@ -228,6 +278,7 @@
                 dlLedger: false, dlSummary: false
             });
             const setBtn = (k, v) => setBtnLoad(prev => ({ ...prev, [k]: v }));
+            const transactionSubmitInFlight = useRef(false);
 
             const [historyFromDate, setHistoryFromDate] = useState(new Date().toISOString().split('T')[0]);
             const [historyToDate, setHistoryToDate] = useState(new Date().toISOString().split('T')[0]);
@@ -258,6 +309,15 @@
             const [partyReport, setPartyReport] = useState([]);
             const [partyRepFilters, setPartyRepFilters] = useState({ from: new Date().toISOString().split('T')[0], to: new Date().toISOString().split('T')[0], party: '' });
             const [partyRepLoading, setPartyRepLoading] = useState(false);
+            const [salesReportData, setSalesReportData] = useState([]);
+            const [salesReportSource, setSalesReportSource] = useState('All');
+            const [salesReportView, setSalesReportView] = useState('party');
+            const [salesReportMonth, setSalesReportMonth] = useState('all');
+            const [salesReportSearch, setSalesReportSearch] = useState('');
+            const [salesReportSort, setSalesReportSort] = useState({ key: 'totalGP', direction: -1 });
+            const [salesReportStatus, setSalesReportStatus] = useState('idle');
+            const [salesReportError, setSalesReportError] = useState('');
+            const salesReportLoadInFlight = useRef(false);
 
             const [formData, setFormData] = useState({
                 date: new Date().toISOString().split('T')[0], warehouse: '', toWarehouse: '',
@@ -269,6 +329,45 @@
 
             const isNetMode = formData.billType === 'NON-GST';
             const isConfigured = APPS_SCRIPT_URL && APPS_SCRIPT_URL !== "YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+
+            const loadSalesReport = () => {
+                if (salesReportLoadInFlight.current) return;
+                salesReportLoadInFlight.current = true;
+                setSalesReportStatus('loading');
+                setSalesReportError('');
+                if (!isConfigured || typeof google === 'undefined') {
+                    salesReportLoadInFlight.current = false;
+                    setSalesReportError('Apps Script URL is not configured.');
+                    setSalesReportStatus('error');
+                    return;
+                }
+
+                const today = new Date().toISOString().split('T')[0];
+                google.script.run
+                    .withSuccessHandler(res => {
+                        try {
+                            const rows = JSON.parse(res);
+                            if (!Array.isArray(rows)) throw new Error('Sales report response is not a row list.');
+                            const prepared = rows.map(prepareSalesReportRow);
+                            setSalesReportData(prepared);
+                            const months = [...new Set(prepared.map(row => row._reportMonthKey).filter(month => month !== 'undated'))].sort();
+                            if (months.length) setSalesReportMonth(months[months.length - 1]);
+                            setSalesReportStatus('loaded');
+                        } catch (err) {
+                            console.error('Sales report data error:', err);
+                            setSalesReportError(err.message || 'Could not read sales report data.');
+                            setSalesReportStatus('error');
+                        } finally {
+                            salesReportLoadInFlight.current = false;
+                        }
+                    })
+                    .withFailureHandler(err => {
+                        salesReportLoadInFlight.current = false;
+                        setSalesReportError(err.message || 'Could not load sales report data.');
+                        setSalesReportStatus('error');
+                    })
+                    .getLogsByDateRange('SalesLog', '1900-01-01', today);
+            };
 
             // ── Reports ─────────────────────────────────────────────────────────
             const fetchTallyReport = () => {
@@ -398,6 +497,9 @@
                     google.script.run.withSuccessHandler(res => setSheetProducts(JSON.parse(res))).getProductsFromSheet(modifySheet);
                 }
             }, [activeTab, modifySheet]);
+            useEffect(() => {
+                if (activeTab === 'salesreport' && salesReportStatus === 'idle') loadSalesReport();
+            }, [activeTab, salesReportStatus]);
             useEffect(() => { if (modifyResults.length > 0 && modifyResultsRef.current) modifyResultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [modifyResults]);
 
             const [refreshing, setRefreshing] = useState(false);
@@ -623,6 +725,7 @@
 
             // ── Submit transaction ───────────────────────────────────────────────
             const handleSubmit = (action) => {
+                if (transactionSubmitInFlight.current) return;
                 if (action === 'STOCK_OUT' && (!formData.padNo || !formData.partyName || !formData.salesPerson)) return Toast.fire({ icon: 'warning', title: 'Party, Pad No & Sales Person Must!' });
                 if (action === 'TRANSFER' && (!formData.toWarehouse || formData.warehouse === formData.toWarehouse)) return Toast.fire({ icon: 'warning', title: 'Invalid Destination!' });
                 if (orderItems.length === 0) return Toast.fire({ icon: 'error', title: 'Add atleast 1 item!' });
@@ -653,6 +756,7 @@
                     }
                 }
 
+                transactionSubmitInFlight.current = true;
                 setBtn('saveTxn', true);
                 const effectiveBillNo = isNetMode ? (formData.netBillNo || '') : formData.billNo;
                 const payload = {
@@ -670,8 +774,13 @@
                             setPartySearch(''); refreshData();
                         } else Toast.fire({ icon: 'error', title: res.message });
                         setBtn('saveTxn', false);
+                        transactionSubmitInFlight.current = false;
                     })
-                    .withFailureHandler(err => { setBtn('saveTxn', false); Toast.fire({ icon: 'error', title: err.message }); })
+                    .withFailureHandler(err => {
+                        setBtn('saveTxn', false);
+                        transactionSubmitInFlight.current = false;
+                        Toast.fire({ icon: 'error', title: err.message });
+                    })
                     .processData(JSON.stringify(payload));
             };
 
@@ -791,6 +900,85 @@
                 return grouped;
             }, [ledgerData]);
 
+            const salesReportSourceRows = useMemo(() => salesReportData.filter(row =>
+                salesReportSource === 'All' || row._reportWarehouse.toLowerCase() === salesReportSource.toLowerCase()
+            ), [salesReportData, salesReportSource]);
+            const salesReportMonths = useMemo(() => {
+                const months = new Map();
+                salesReportSourceRows.forEach(row => {
+                    if (row._reportMonthKey !== 'undated') months.set(row._reportMonthKey, row._reportMonth);
+                });
+                return [...months.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+            }, [salesReportSourceRows]);
+            useEffect(() => {
+                if (salesReportStatus !== 'loaded' || salesReportMonth === 'all') return;
+                if (!salesReportMonths.some(([key]) => key === salesReportMonth)) {
+                    setSalesReportMonth(salesReportMonths.length ? salesReportMonths[salesReportMonths.length - 1][0] : 'all');
+                }
+            }, [salesReportStatus, salesReportMonth, salesReportMonths]);
+            const salesReportDimension = salesReportView === 'sales' ? '_reportSalesPerson'
+                : salesReportView === 'mills' ? '_reportMill'
+                : salesReportView === 'product' ? '_reportProduct'
+                : salesReportView === 'warehouse' ? '_reportWarehouse'
+                : salesReportView === 'po' ? '_reportPO'
+                : '_reportParty';
+            const salesReportMonthRows = useMemo(() => salesReportSourceRows.filter(row =>
+                salesReportMonth === 'all' || row._reportMonthKey === salesReportMonth
+            ), [salesReportSourceRows, salesReportMonth]);
+            const salesReportSuggestions = useMemo(() => [...new Set(salesReportMonthRows.map(row =>
+                salesReportView === 'po' ? row._reportPO || 'PO not recorded' : row[salesReportDimension]
+            ).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })),
+                [salesReportMonthRows, salesReportView, salesReportDimension]);
+            const salesReportFilteredRows = useMemo(() => {
+                const query = salesReportSearch.trim().toLowerCase();
+                return salesReportMonthRows.filter(row => {
+                    const name = salesReportView === 'po' ? row._reportPO || 'PO not recorded' : row[salesReportDimension];
+                    return !query || String(name).toLowerCase().includes(query);
+                });
+            }, [salesReportMonthRows, salesReportSearch, salesReportView, salesReportDimension]);
+            const salesReportSummary = useMemo(() => {
+                const grouped = new Map();
+                salesReportFilteredRows.forEach(row => {
+                    const name = salesReportView === 'po' ? row._reportPO || 'PO not recorded' : row[salesReportDimension];
+                    const key = `${row._reportMonthKey}||${String(name).toLowerCase()}`;
+                    if (!grouped.has(key)) grouped.set(key, {
+                        month: row._reportMonth, monthKey: row._reportMonthKey, name,
+                        revenue: 0, variableCost: 0, totalGP: 0, totalQty: 0, entries: 0, bills: new Set()
+                    });
+                    const group = grouped.get(key);
+                    group.revenue += row._reportRevenue;
+                    group.variableCost += row._reportVariableCost;
+                    group.totalGP += row._reportProfit;
+                    group.totalQty += row._reportQty;
+                    group.entries++;
+                    if (row._reportBill.trim()) group.bills.add(row._reportBill.trim().toLowerCase());
+                });
+                const rows = [...grouped.values()].map(row => ({ ...row, billCount: row.bills.size }));
+                const totals = salesReportFilteredRows.reduce((result, row) => ({
+                    revenue: result.revenue + row._reportRevenue,
+                    variableCost: result.variableCost + row._reportVariableCost,
+                    totalGP: result.totalGP + row._reportProfit
+                }), { revenue: 0, variableCost: 0, totalGP: 0 });
+                return {
+                    totals,
+                    uniquePOs: new Set(salesReportFilteredRows.map(row => row._reportPO.trim()).filter(Boolean)).size,
+                    rows: rows.map(row => ({
+                        ...row,
+                        pctRevenue: totals.revenue ? row.revenue / totals.revenue * 100 : 0,
+                        pctVariableCost: totals.variableCost ? row.variableCost / totals.variableCost * 100 : 0,
+                        pctGP: row.revenue ? row.totalGP / row.revenue * 100 : 0,
+                        pctTotalGP: totals.totalGP ? row.totalGP / totals.totalGP * 100 : 0
+                    }))
+                };
+            }, [salesReportFilteredRows, salesReportView, salesReportDimension]);
+            const salesReportTableRows = useMemo(() => [...salesReportSummary.rows].sort((a, b) => {
+                const left = a[salesReportSort.key], right = b[salesReportSort.key];
+                if (typeof left === 'string' || typeof right === 'string') {
+                    return salesReportSort.direction * String(left || '').localeCompare(String(right || ''), undefined, { numeric: true, sensitivity: 'base' });
+                }
+                return salesReportSort.direction * ((Number(left) || 0) - (Number(right) || 0));
+            }), [salesReportSummary.rows, salesReportSort]);
+
             const tabs = [
                 { id: 'dashboard', icon: '📊', label: 'Dashboard', short: 'Dash' },
                 { id: 'in', icon: '📥', label: 'Stock In', short: 'In' },
@@ -801,6 +989,7 @@
                 { id: 'report', icon: '📜', label: 'Stock Book', short: 'Book' },
                 { id: 'search', icon: '🔍', label: 'Search', short: 'Search' },
                 { id: 'partyreport', icon: '👤', label: 'Party Report', short: 'Party' },
+                { id: 'salesreport', icon: '📈', label: 'Gross Profit Report', short: 'Profit' },
             ];
 
             const switchTab = (id) => { setActiveTab(id); setOrderItems([]); setFormData(prev => ({ ...prev, product: '', qty: '', price: '', warehouse: '', toWarehouse: '', mill: '', billType: 'GST', billNo: '', netBillNo: '', partyName: '', padNo: '', discount: '0', freight: '0', freightRecovered: 'No', insurance: '0', cartage: '0', loading: '0' })); setSearchQuery(''); setPartySearch(''); };
@@ -824,7 +1013,7 @@
 
                         {/* Mobile nav */}
                         <div className="mobile-nav flex-row items-center justify-around py-2 px-1 border-t border-slate-800 gap-2">
-                            {tabs.filter(t => ['dashboard', 'in', 'out', 'transfer', 'report'].includes(t.id)).map(tab => (
+                            {tabs.filter(t => ['dashboard', 'in', 'out', 'transfer', 'report', 'salesreport'].includes(t.id)).map(tab => (
                                 <button key={tab.id} onClick={() => switchTab(tab.id)} className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-[9px] font-bold transition ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>
                                     <span className="text-base">{tab.icon}</span><span>{tab.short}</span>
                                 </button>
@@ -1719,6 +1908,169 @@
                                                 </table>
                                             </div>
                                         </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {activeTab === 'salesreport' && (
+                                <div className="max-w-7xl mx-auto space-y-5">
+                                    <div className="flex flex-wrap justify-between items-end gap-3">
+                                        <div>
+                                            <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-600">Satija Paper</p>
+                                            <h1 className="text-3xl font-black tracking-tight text-slate-900">Gross Profit Dashboard</h1>
+                                        </div>
+                                        <button onClick={loadSalesReport} disabled={salesReportStatus === 'loading'} className={`px-5 py-2.5 bg-slate-900 text-white rounded-xl font-black uppercase text-xs hover:bg-blue-700 disabled:opacity-60 ${salesReportStatus === 'loading' ? 'btn-spin' : ''}`}>
+                                            {salesReportStatus === 'loading' ? 'Loading...' : 'Refresh'}
+                                        </button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                        <label className="space-y-1">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Sales Source</span>
+                                            <select value={salesReportSource} onChange={e => {
+                                                const source = e.target.value;
+                                                setSalesReportSource(source);
+                                                setSalesReportView(source === 'By Truck' ? 'po' : 'party');
+                                                setSalesReportSearch('');
+                                            }} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm">
+                                                <option value="All">All Sales Logs</option>
+                                                <option value="Khera Kalan">Khera Kalan</option>
+                                                <option value="Mukherjee Nagar">Mukherjee Nagar</option>
+                                                <option value="By Truck">By Truck</option>
+                                            </select>
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Month &amp; Year</span>
+                                            <select value={salesReportMonth} onChange={e => setSalesReportMonth(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm">
+                                                <option value="all">All Months</option>
+                                                {salesReportMonths.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                                            </select>
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                                                Search {salesReportView === 'po' ? 'PO No' : salesReportView === 'party' ? 'Party' : salesReportView === 'sales' ? 'Sales Person' : salesReportView === 'mills' ? 'Mill' : salesReportView === 'product' ? 'Product' : 'Warehouse'}
+                                            </span>
+                                            <input list="sales-report-suggestions" value={salesReportSearch} onChange={e => setSalesReportSearch(e.target.value)} placeholder="Type to filter..." className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm" />
+                                            <datalist id="sales-report-suggestions">
+                                                {salesReportSuggestions.map(name => <option key={name} value={name} />)}
+                                            </datalist>
+                                        </label>
+                                    </div>
+
+                                    {salesReportStatus === 'loading' && (
+                                        <div className="bg-white rounded-2xl p-8 text-center text-slate-500 font-bold">Loading SalesLog records...</div>
+                                    )}
+                                    {salesReportStatus === 'error' && (
+                                        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-5 text-rose-700 font-bold">{salesReportError}</div>
+                                    )}
+                                    {salesReportStatus === 'loaded' && (
+                                        <>
+                                            {salesReportSource === 'By Truck' && salesReportData.length > 0 && !salesReportData.some(row =>
+                                                Object.keys(row).some(key => ['pono', 'ponumber', 'purchaseorderno'].includes(reportHeaderKey(key)))
+                                            ) && (
+                                                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-800 text-sm font-bold">
+                                                    PO No column was not returned by the SalesLog API. Confirm the header in column R of SalesLog_By Truck.
+                                                </div>
+                                            )}
+                                            <div className="flex flex-wrap gap-2">
+                                                {[
+                                                    { id: 'party', label: '🏪 Party-Wise' },
+                                                    { id: 'sales', label: '👤 Sales Person-Wise' },
+                                                    { id: 'mills', label: '🏭 Mills-Wise' },
+                                                    { id: 'product', label: '📦 Product-Wise' },
+                                                    { id: 'warehouse', label: '🏢 Warehouse-Wise' },
+                                                    ...(salesReportSource === 'By Truck' ? [{ id: 'po', label: '🚚 By Truck PO-Wise' }] : [])
+                                                ].map(item => (
+                                                    <button key={item.id} onClick={() => {
+                                                        setSalesReportView(item.id);
+                                                        setSalesReportSearch('');
+                                                        setSalesReportSort({ key: 'totalGP', direction: -1 });
+                                                    }} className={`px-4 py-2 rounded-xl text-xs font-black transition ${salesReportView === item.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'bg-white text-slate-600 border border-slate-200 hover:bg-blue-50'}`}>
+                                                        {item.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            <div className={`grid grid-cols-1 gap-3 ${salesReportView === 'po' ? 'sm:grid-cols-2 xl:grid-cols-4' : 'sm:grid-cols-2 lg:grid-cols-3'}`}>
+                                                {[
+                                                    { label: 'Total Revenue', value: `₹${n2(salesReportSummary.totals.revenue, true)}`, color: 'text-blue-700', icon: '💰' },
+                                                    { label: 'Total Gross Profit', value: `₹${n2(salesReportSummary.totals.totalGP, true)}`, color: 'text-emerald-700', icon: '📈' },
+                                                    { label: 'Total Variable Cost', value: `₹${n2(salesReportSummary.totals.variableCost, true)}`, color: 'text-amber-700', icon: '📉' },
+                                                    ...(salesReportView === 'po' ? [{ label: 'Unique PO Numbers', value: n2(salesReportSummary.uniquePOs), color: 'text-violet-700', icon: '🚚' }] : [])
+                                                ].map(card => (
+                                                    <div key={card.label} className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 shadow-sm">
+                                                        <span className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center text-xl">{card.icon}</span>
+                                                        <div className="min-w-0">
+                                                            <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">{card.label}</p>
+                                                            <p className={`text-sm md:text-base xl:text-lg font-black ${card.color}`}>{card.value}</p>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-lg">
+                                                <div className="bg-[#07172e] text-white p-4 flex flex-wrap justify-between items-center gap-2">
+                                                    <h2 className="font-black uppercase tracking-wider text-sm">
+                                                        {salesReportView === 'po' ? 'By Truck PO-Wise Report' : `${salesReportView === 'party' ? 'Party' : salesReportView === 'sales' ? 'Sales Person' : salesReportView === 'mills' ? 'Mills' : salesReportView === 'product' ? 'Product' : 'Warehouse'}-Wise Report`}
+                                                        <span className="ml-2 text-blue-300 font-bold normal-case">({salesReportTableRows.length} entries)</span>
+                                                    </h2>
+                                                    <span className="text-[10px] text-slate-300">Click a column heading to sort</span>
+                                                </div>
+                                                <div className="scroll-top-table">
+                                                    <table className="w-full min-w-[950px] text-left text-xs">
+                                                        <thead className="bg-slate-100 text-slate-700">
+                                                            <tr>
+                                                                {[
+                                                                    { key: 'monthKey', label: 'Month', value: row => row.month, numeric: false },
+                                                                    { key: 'name', label: salesReportView === 'po' ? 'PO No' : salesReportView === 'party' ? 'Party' : salesReportView === 'sales' ? 'Sales Person' : salesReportView === 'mills' ? 'Mill' : salesReportView === 'product' ? 'Product' : 'Warehouse', value: row => row.name, numeric: false },
+                                                                    ...(salesReportView === 'po' ? [
+                                                                        { key: 'entries', label: 'Sales Rows', value: row => n2(row.entries), numeric: true },
+                                                                        { key: 'billCount', label: 'Bills', value: row => n2(row.billCount), numeric: true },
+                                                                        { key: 'totalQty', label: 'Qty', value: row => n2(row.totalQty), numeric: true }
+                                                                    ] : []),
+                                                                    { key: 'revenue', label: 'Revenue (₹)', value: row => `₹${n2(row.revenue, true)}`, numeric: true },
+                                                                    { key: 'pctRevenue', label: '% Revenue', value: row => `${row.pctRevenue.toFixed(2)}%`, numeric: true },
+                                                                    { key: 'variableCost', label: 'Variable Cost (₹)', value: row => `₹${n2(row.variableCost, true)}`, numeric: true },
+                                                                    { key: 'pctVariableCost', label: '% Variable Cost', value: row => `${row.pctVariableCost.toFixed(2)}%`, numeric: true },
+                                                                    { key: 'pctGP', label: '% GP', value: row => `${row.pctGP.toFixed(2)}%`, numeric: true },
+                                                                    { key: 'totalGP', label: 'Total GP (₹)', value: row => `₹${n2(row.totalGP, true)}`, numeric: true },
+                                                                    { key: 'pctTotalGP', label: '% Total GP', value: row => `${row.pctTotalGP.toFixed(2)}%`, numeric: true }
+                                                                ].map(column => (
+                                                                    <th key={column.key} onClick={() => setSalesReportSort(current => ({
+                                                                        key: column.key,
+                                                                        direction: current.key === column.key ? current.direction * -1 : (column.numeric ? -1 : 1)
+                                                                    }))} className={`p-3 whitespace-nowrap cursor-pointer hover:bg-blue-100 ${column.numeric ? 'text-right' : 'text-left'}`}>
+                                                                        {column.label}{salesReportSort.key === column.key ? (salesReportSort.direction === 1 ? ' ▲' : ' ▼') : ''}
+                                                                    </th>
+                                                                ))}
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-100">
+                                                            {salesReportTableRows.length ? salesReportTableRows.map((row, index) => (
+                                                                <tr key={`${row.monthKey}-${row.name}-${index}`} className="hover:bg-blue-50">
+                                                                    <td className="p-3 text-slate-500 whitespace-nowrap">{row.month}</td>
+                                                                    <td className="p-3 font-bold text-slate-800">{row.name}</td>
+                                                                    {salesReportView === 'po' && <>
+                                                                        <td className="p-3 text-right">{n2(row.entries)}</td>
+                                                                        <td className="p-3 text-right">{n2(row.billCount)}</td>
+                                                                        <td className="p-3 text-right">{n2(row.totalQty)}</td>
+                                                                    </>}
+                                                                    <td className="p-3 text-right whitespace-nowrap">₹{n2(row.revenue, true)}</td>
+                                                                    <td className="p-3 text-right">{row.pctRevenue.toFixed(2)}%</td>
+                                                                    <td className="p-3 text-right whitespace-nowrap">₹{n2(row.variableCost, true)}</td>
+                                                                    <td className="p-3 text-right">{row.pctVariableCost.toFixed(2)}%</td>
+                                                                    <td className="p-3 text-right"><span className={`px-2 py-1 rounded-full font-bold ${row.pctGP < 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{row.pctGP.toFixed(2)}%</span></td>
+                                                                    <td className="p-3 text-right font-black text-emerald-700 whitespace-nowrap">₹{n2(row.totalGP, true)}</td>
+                                                                    <td className="p-3 text-right">{row.pctTotalGP.toFixed(2)}%</td>
+                                                                </tr>
+                                                            )) : (
+                                                                <tr><td colSpan={salesReportView === 'po' ? 12 : 9} className="p-12 text-center text-slate-400 font-bold">No data for the selected filters.</td></tr>
+                                                            )}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        </>
                                     )}
                                 </div>
                             )}
