@@ -17,6 +17,8 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; background: #f8fafc; }
+        table { border-collapse: collapse; }
+        table th, table td { border: 1px solid #cbd5e1; }
         .sidebar-active { background: #2563eb; color: white; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(37,99,235,0.4); }
         .custom-scroll::-webkit-scrollbar { width: 6px; }
         .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
@@ -233,6 +235,7 @@
             const amount = reportNumber(reportField(row, ['Amount', 'Revenue']));
             const profit = reportNumber(reportField(row, ['Profit', 'Gross Profit', 'Total GP']));
             const rateValue = reportField(row, ['Rate']);
+            const buyPriceValue = reportField(row, ['Buy Price', 'Cost Price']);
             return {
                 ...row,
                 _reportMonthKey: month.key,
@@ -246,6 +249,7 @@
                 _reportBill: String(reportField(row, ['Bill No', 'Bill No.']) || ''),
                 _reportQty: reportNumber(reportField(row, ['Qty', 'Quantity'])),
                 _reportRate: rateValue === '' || rateValue === null || rateValue === undefined ? null : reportNumber(rateValue),
+                _reportBuyPrice: buyPriceValue === '' || buyPriceValue === null || buyPriceValue === undefined ? null : reportNumber(buyPriceValue),
                 _reportRevenue: amount,
                 _reportProfit: profit,
                 _reportVariableCost: amount - profit
@@ -261,6 +265,7 @@
         function App() {
             const [ledgerData, setLedgerData] = useState([]);
             const [activeTab, setActiveTab] = useState('dashboard');
+            const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
             const [dashData, setDashData] = useState({ items: [], totalValue: 0 });
             const [selectedWH, setSelectedWH] = useState(WAREHOUSES[0]);
             const [masterItems, setMasterItems] = useState([]);
@@ -946,15 +951,26 @@
                     if (!grouped.has(key)) grouped.set(key, {
                         month: row._reportMonth, monthKey: row._reportMonthKey, name,
                         revenue: 0, variableCost: 0, totalGP: 0,
+                        saleRateTotal: 0, saleRateQty: 0, buyPriceTotal: 0, buyPriceQty: 0,
                         partyItems: []
                     });
                     const group = grouped.get(key);
                     group.revenue += row._reportRevenue;
                     group.variableCost += row._reportVariableCost;
                     group.totalGP += row._reportProfit;
+                    if (salesReportView === 'product') {
+                        if (row._reportRate !== null) {
+                            group.saleRateTotal += row._reportRate * row._reportQty;
+                            group.saleRateQty += row._reportQty;
+                        }
+                        if (row._reportBuyPrice !== null) {
+                            group.buyPriceTotal += row._reportBuyPrice * row._reportQty;
+                            group.buyPriceQty += row._reportQty;
+                        }
+                    }
                     if (salesReportView === 'po') group.partyItems.push({
                         party: row._reportParty, item: row._reportProduct,
-                        qty: row._reportQty, rate: row._reportRate
+                        qty: row._reportQty, rate: row._reportRate, buyPrice: row._reportBuyPrice
                     });
                 });
                 const rows = [...grouped.values()];
@@ -977,7 +993,10 @@
                             partyNames: partyItems.map(item => item.party).join('\n'),
                             items: partyItems.map(item => item.item).join('\n'),
                             itemQtys: partyItems.map(item => n2(item.qty)).join('\n'),
-                            itemRates: partyItems.map(item => item.rate === null ? '-' : `₹${n2(item.rate, true)}`).join('\n')
+                            itemRates: partyItems.map(item => item.rate === null ? '-' : `₹${n2(item.rate, true)}`).join('\n'),
+                            itemBuyPrices: partyItems.map(item => item.buyPrice === null ? '-' : `₹${n2(item.buyPrice, true)}`).join('\n'),
+                            salePrice: row.saleRateQty ? row.saleRateTotal / row.saleRateQty : null,
+                            buyPrice: row.buyPriceQty ? row.buyPriceTotal / row.buyPriceQty : null
                         };
                     })
                 };
@@ -1032,15 +1051,33 @@
                         </div>
 
                         {/* Sidebar */}
-                        <aside className="sidebar-desktop w-72 bg-[#0f172a] text-slate-400 flex flex-col shadow-2xl z-[100]">
-                            <div className="p-6 text-center border-b border-slate-800">
-                                <img src={LOGO_URL} alt="Satija Paper Logo" className="w-16 h-16 mx-auto mb-2 rounded-full object-cover border-2 border-blue-500 shadow-lg shadow-blue-500/30" onError={e => { e.target.style.display = 'none'; }} />
-                                <h1 className="text-white font-black text-xl italic tracking-tighter uppercase">SATIJA PAPER</h1>
+                        <aside className={`sidebar-desktop ${sidebarCollapsed ? 'w-20' : 'w-72'} shrink-0 bg-[#0f172a] text-slate-400 flex flex-col shadow-2xl z-[100] transition-all duration-200`}>
+                            <div className={`border-b border-slate-800 ${sidebarCollapsed ? 'p-3' : 'p-6 text-center'}`}>
+                                {!sidebarCollapsed && (
+                                    <>
+                                        <img src={LOGO_URL} alt="Satija Paper Logo" className="w-16 h-16 mx-auto mb-2 rounded-full object-cover border-2 border-blue-500 shadow-lg shadow-blue-500/30" onError={e => { e.target.style.display = 'none'; }} />
+                                        <h1 className="text-white font-black text-xl italic tracking-tighter uppercase">SATIJA PAPER</h1>
+                                    </>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => setSidebarCollapsed(collapsed => !collapsed)}
+                                    aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                                    title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                                    className={`rounded-lg bg-slate-800 hover:bg-blue-600 text-white font-bold transition ${sidebarCollapsed ? 'w-full py-3' : 'mt-4 px-4 py-2 text-xs'}`}
+                                >
+                                    {sidebarCollapsed ? '»' : 'Collapse ‹'}
+                                </button>
                             </div>
-                            <nav className="flex-1 px-4 mt-4 space-y-1 overflow-y-auto custom-scroll pb-6">
+                            <nav className={`flex-1 ${sidebarCollapsed ? 'px-2' : 'px-4'} mt-4 space-y-1 overflow-y-auto custom-scroll pb-6`}>
                                 {tabs.map(tab => (
-                                    <button key={tab.id} onClick={() => switchTab(tab.id)} className={`w-full text-left px-4 py-3 font-bold transition rounded-lg ${activeTab === tab.id ? 'sidebar-active' : 'hover:text-white'}`}>
-                                        {tab.icon} {tab.label}
+                                    <button
+                                        key={tab.id}
+                                        onClick={() => switchTab(tab.id)}
+                                        title={sidebarCollapsed ? tab.label : undefined}
+                                        className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-4 text-left'} py-3 font-bold transition rounded-lg ${activeTab === tab.id ? 'sidebar-active' : 'hover:text-white'}`}
+                                    >
+                                        <span>{tab.icon}</span>{!sidebarCollapsed && <span>{tab.label}</span>}
                                     </button>
                                 ))}
                             </nav>
@@ -1989,7 +2026,7 @@
                                                     { id: 'sales', label: '👤 Sales Person-Wise' },
                                                     { id: 'mills', label: '🏭 Mills-Wise' },
                                                     { id: 'product', label: '📦 Product-Wise' },
-                                                    { id: 'warehouse', label: '🏢 Warehouse-Wise' },
+                                                    ...(salesReportSource === 'All' ? [{ id: 'warehouse', label: '🏢 Warehouse-Wise' }] : []),
                                                     ...(salesReportSource === 'By Truck' ? [{ id: 'po', label: '🚚 By Truck PO-Wise' }] : [])
                                                 ].map(item => (
                                                     <button key={item.id} onClick={() => {
@@ -2038,7 +2075,12 @@
                                                                         { key: 'partyNames', label: 'Party Name', value: row => row.partyNames, numeric: false },
                                                                         { key: 'items', label: 'Item', value: row => row.items, numeric: false },
                                                                         { key: 'itemQtys', label: 'Qty', value: row => row.itemQtys, numeric: false },
-                                                                        { key: 'itemRates', label: 'Rate (₹/unit)', value: row => row.itemRates, numeric: false }
+                                                                        { key: 'itemRates', label: 'Sale Price (₹/unit)', value: row => row.itemRates, numeric: false },
+                                                                        { key: 'itemBuyPrices', label: 'Buy Price (₹/unit)', value: row => row.itemBuyPrices, numeric: false }
+                                                                    ] : []),
+                                                                    ...(salesReportView === 'product' ? [
+                                                                        { key: 'salePrice', label: 'Avg Sale Price (₹/unit)', value: row => row.salePrice === null ? '-' : `₹${n2(row.salePrice, true)}`, numeric: true },
+                                                                        { key: 'buyPrice', label: 'Avg Buy Price (₹/unit)', value: row => row.buyPrice === null ? '-' : `₹${n2(row.buyPrice, true)}`, numeric: true }
                                                                     ] : []),
                                                                     { key: 'revenue', label: 'Revenue (₹)', value: row => `₹${n2(row.revenue, true)}`, numeric: true },
                                                                     { key: 'pctRevenue', label: '% Revenue', value: row => `${row.pctRevenue.toFixed(2)}%`, numeric: true },
@@ -2065,6 +2107,11 @@
                                                                         <td className="p-3 whitespace-pre-line">{row.items}</td>
                                                                         <td className="p-3 text-right whitespace-pre-line">{row.itemQtys}</td>
                                                                         <td className="p-3 text-right whitespace-pre-line">{row.itemRates}</td>
+                                                                        <td className="p-3 text-right whitespace-pre-line">{row.itemBuyPrices}</td>
+                                                                    </>}
+                                                                    {salesReportView === 'product' && <>
+                                                                        <td className="p-3 text-right whitespace-nowrap">{row.salePrice === null ? '-' : `₹${n2(row.salePrice, true)}`}</td>
+                                                                        <td className="p-3 text-right whitespace-nowrap">{row.buyPrice === null ? '-' : `₹${n2(row.buyPrice, true)}`}</td>
                                                                     </>}
                                                                     <td className="p-3 text-right whitespace-nowrap">₹{n2(row.revenue, true)}</td>
                                                                     <td className="p-3 text-right">{row.pctRevenue.toFixed(2)}%</td>
@@ -2073,7 +2120,7 @@
                                                                     <td className="p-3 text-right"><span className={`px-2 py-1 rounded-full font-bold ${row.pctGP < 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{row.pctGP.toFixed(2)}%</span></td>
                                                                 </tr>
                                                             )) : (
-                                                                <tr><td colSpan={salesReportView === 'po' ? 11 : 7} className="p-12 text-center text-slate-400 font-bold">No data for the selected filters.</td></tr>
+                                                                <tr><td colSpan={salesReportView === 'po' ? 12 : salesReportView === 'product' ? 9 : 7} className="p-12 text-center text-slate-400 font-bold">No data for the selected filters.</td></tr>
                                                             )}
                                                         </tbody>
                                                     </table>
