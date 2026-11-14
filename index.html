@@ -124,7 +124,7 @@
             }
 
             const url = APPS_SCRIPT_URL + (APPS_SCRIPT_URL.includes('?') ? '&' : '?') + params.toString();
-            const response = await fetch(url);
+            const response = await fetch(url, { cache: 'no-store' });
             // Returns raw text string so that JSON.parse(res) inside existing handlers works seamlessly
             return await response.text();
         }
@@ -271,7 +271,7 @@
             const [masterItems, setMasterItems] = useState([]);
             const [parties, setParties] = useState([]);
             const [orderItems, setOrderItems] = useState([]);
-            const [logModal, setLogModal] = useState({ show: false, title: '', data: [] });
+            const [logModal, setLogModal] = useState({ show: false, title: '', data: [], refreshQuery: null });
             const [searchQuery, setSearchQuery] = useState('');
             const [partySearch, setPartySearch] = useState('');
             const [showResults, setShowResults] = useState(false);
@@ -325,6 +325,24 @@
             const [salesReportStatus, setSalesReportStatus] = useState('idle');
             const [salesReportError, setSalesReportError] = useState('');
             const salesReportLoadInFlight = useRef(false);
+            const dataRefreshInFlight = useRef(false);
+            const modifyOptionsInFlight = useRef(false);
+            const logModalRefreshInFlight = useRef(false);
+            const reportLoadInFlight = useRef(false);
+            const ledgerLoadInFlight = useRef(false);
+            const modifySearchInFlight = useRef(false);
+            const globalSearchInFlight = useRef(false);
+            const partyReportInFlight = useRef(false);
+            const partyReportQuery = useRef(null);
+            const tallyReportQuery = useRef(null);
+            const ledgerQuery = useRef(null);
+            const modifySearchQuery = useRef(null);
+            const tallyReportRequested = useRef(false);
+            const ledgerRequested = useRef(false);
+            const modifySearchRequested = useRef(false);
+            const globalSearchRequested = useRef('');
+            const partyReportRequested = useRef(false);
+            const autoRefreshCallback = useRef(null);
 
             const [formData, setFormData] = useState({
                 date: new Date().toISOString().split('T')[0], warehouse: '', toWarehouse: '',
@@ -337,15 +355,17 @@
             const isNetMode = formData.billType === 'NON-GST';
             const isConfigured = APPS_SCRIPT_URL && APPS_SCRIPT_URL !== "YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
 
-            const loadSalesReport = () => {
+            const loadSalesReport = (isAutomatic = false) => {
                 if (salesReportLoadInFlight.current) return;
                 salesReportLoadInFlight.current = true;
-                setSalesReportStatus('loading');
-                setSalesReportError('');
+                if (!isAutomatic) {
+                    setSalesReportStatus('loading');
+                    setSalesReportError('');
+                }
                 if (!isConfigured || typeof google === 'undefined') {
                     salesReportLoadInFlight.current = false;
                     setSalesReportError('Apps Script URL is not configured.');
-                    setSalesReportStatus('error');
+                    if (!isAutomatic) setSalesReportStatus('error');
                     return;
                 }
 
@@ -357,13 +377,14 @@
                             if (!Array.isArray(rows)) throw new Error('Sales report response is not a row list.');
                             const prepared = rows.map(prepareSalesReportRow);
                             setSalesReportData(prepared);
+                            setSalesReportError('');
                             const months = [...new Set(prepared.map(row => row._reportMonthKey).filter(month => month !== 'undated'))].sort();
-                            if (months.length) setSalesReportMonth(months[months.length - 1]);
+                            if (months.length && !isAutomatic) setSalesReportMonth(months[months.length - 1]);
                             setSalesReportStatus('loaded');
                         } catch (err) {
                             console.error('Sales report data error:', err);
                             setSalesReportError(err.message || 'Could not read sales report data.');
-                            setSalesReportStatus('error');
+                            if (!isAutomatic) setSalesReportStatus('error');
                         } finally {
                             salesReportLoadInFlight.current = false;
                         }
@@ -371,40 +392,89 @@
                     .withFailureHandler(err => {
                         salesReportLoadInFlight.current = false;
                         setSalesReportError(err.message || 'Could not load sales report data.');
-                        setSalesReportStatus('error');
+                        if (!isAutomatic) setSalesReportStatus('error');
                     })
                     .getLogsByDateRange('SalesLog', '1900-01-01', today);
             };
 
             // ── Reports ─────────────────────────────────────────────────────────
-            const fetchTallyReport = () => {
-                setBtn('summary', true);
+            const fetchTallyReport = (isAutomatic = false) => {
+                if (!isAutomatic) {
+                    tallyReportRequested.current = true;
+                    tallyReportQuery.current = { ...repFilters };
+                }
+                if (!tallyReportRequested.current || !tallyReportQuery.current || reportLoadInFlight.current) return;
+                reportLoadInFlight.current = true;
+                if (!isAutomatic) setBtn('summary', true);
                 if (typeof google !== 'undefined') {
                     google.script.run
                         .withSuccessHandler(res => {
-                            const data = JSON.parse(res);
-                            setReportData(data); setBtn('summary', false);
-                            if (data.length === 0) Toast.fire({ icon: 'info', title: 'No transactions found!' });
-                            else Toast.fire({ icon: 'success', title: data.length + ' products loaded' });
+                            try {
+                                const data = JSON.parse(res);
+                                setReportData(data);
+                                if (!isAutomatic) {
+                                    if (data.length === 0) Toast.fire({ icon: 'info', title: 'No transactions found!' });
+                                    else Toast.fire({ icon: 'success', title: data.length + ' products loaded' });
+                                }
+                            } catch (err) {
+                                console.error('Stock summary refresh failed:', err);
+                                if (!isAutomatic) Toast.fire({ icon: 'error', title: err.message || 'Could not load stock summary.' });
+                            } finally {
+                                reportLoadInFlight.current = false;
+                                if (!isAutomatic) setBtn('summary', false);
+                            }
                         })
-                        .withFailureHandler(err => { setBtn('summary', false); Toast.fire({ icon: 'error', title: err.message }); })
-                        .getTallyStockReport(repFilters.from, repFilters.to, repFilters.wh);
+                        .withFailureHandler(err => {
+                            reportLoadInFlight.current = false;
+                            if (!isAutomatic) { setBtn('summary', false); Toast.fire({ icon: 'error', title: err.message }); }
+                            else console.error('Stock summary refresh failed:', err);
+                        })
+                        .getTallyStockReport(tallyReportQuery.current.from, tallyReportQuery.current.to, tallyReportQuery.current.wh);
+                } else {
+                    reportLoadInFlight.current = false;
+                    if (!isAutomatic) setBtn('summary', false);
                 }
             };
 
-            const fetchLedger = () => {
-                if (!formData.product) return Toast.fire({ icon: 'warning', title: 'Select Product!' });
-                setBtn('ledger', true);
+            const fetchLedger = (isAutomatic = false) => {
+                if (!isAutomatic) {
+                    if (!formData.product) return Toast.fire({ icon: 'warning', title: 'Select Product!' });
+                    ledgerRequested.current = true;
+                    ledgerQuery.current = { filters: { ...repFilters }, mill: formData.mill, product: formData.product };
+                }
+                if (!ledgerRequested.current || !ledgerQuery.current || ledgerLoadInFlight.current) return;
+                ledgerLoadInFlight.current = true;
+                if (!isAutomatic) setBtn('ledger', true);
                 if (typeof google !== 'undefined') {
                     google.script.run
                         .withSuccessHandler(res => {
-                            const data = JSON.parse(res);
-                            setLedgerData(data); setBtn('ledger', false);
-                            if (data.length === 0) Toast.fire({ icon: 'info', title: 'No transactions found!' });
-                            else Toast.fire({ icon: 'success', title: data.length + ' rows loaded' });
+                            try {
+                                const data = JSON.parse(res);
+                                setLedgerData(data);
+                                if (!isAutomatic) {
+                                    if (data.length === 0) Toast.fire({ icon: 'info', title: 'No transactions found!' });
+                                    else Toast.fire({ icon: 'success', title: data.length + ' rows loaded' });
+                                }
+                            } catch (err) {
+                                console.error('Stock ledger refresh failed:', err);
+                                if (!isAutomatic) Toast.fire({ icon: 'error', title: err.message || 'Could not load stock ledger.' });
+                            } finally {
+                                ledgerLoadInFlight.current = false;
+                                if (!isAutomatic) setBtn('ledger', false);
+                            }
                         })
-                        .withFailureHandler(err => { setBtn('ledger', false); Toast.fire({ icon: 'error', title: err.message }); })
-                        .getDailyStockLedger(repFilters.from, repFilters.to, repFilters.wh, formData.mill, formData.product);
+                        .withFailureHandler(err => {
+                            ledgerLoadInFlight.current = false;
+                            if (!isAutomatic) { setBtn('ledger', false); Toast.fire({ icon: 'error', title: err.message }); }
+                            else console.error('Stock ledger refresh failed:', err);
+                        })
+                        .getDailyStockLedger(
+                            ledgerQuery.current.filters.from, ledgerQuery.current.filters.to,
+                            ledgerQuery.current.filters.wh, ledgerQuery.current.mill, ledgerQuery.current.product
+                        );
+                } else {
+                    ledgerLoadInFlight.current = false;
+                    if (!isAutomatic) setBtn('ledger', false);
                 }
             };
 
@@ -498,12 +568,31 @@
 
             // ── Data loading ─────────────────────────────────────────────────────
             useEffect(() => { refreshData(); }, []);
-            useEffect(() => {
-                if (activeTab === 'modify' && typeof google !== 'undefined') {
-                    google.script.run.withSuccessHandler(res => setSheetParties(JSON.parse(res))).getPartiesFromSheet(modifySheet);
-                    google.script.run.withSuccessHandler(res => setSheetProducts(JSON.parse(res))).getProductsFromSheet(modifySheet);
-                }
-            }, [activeTab, modifySheet]);
+            const loadModifyOptions = () => {
+                if (activeTab !== 'modify' || typeof google === 'undefined' || modifyOptionsInFlight.current) return;
+                modifyOptionsInFlight.current = true;
+                let pending = 2;
+                const finish = err => {
+                    if (err) console.error('Modify options refresh failed:', err);
+                    pending--;
+                    if (pending === 0) modifyOptionsInFlight.current = false;
+                };
+                google.script.run
+                    .withSuccessHandler(res => {
+                        try { setSheetParties(JSON.parse(res)); finish(); }
+                        catch (err) { finish(err); }
+                    })
+                    .withFailureHandler(finish)
+                    .getPartiesFromSheet(modifySheet);
+                google.script.run
+                    .withSuccessHandler(res => {
+                        try { setSheetProducts(JSON.parse(res)); finish(); }
+                        catch (err) { finish(err); }
+                    })
+                    .withFailureHandler(finish)
+                    .getProductsFromSheet(modifySheet);
+            };
+            useEffect(() => { loadModifyOptions(); }, [activeTab, modifySheet]);
             useEffect(() => {
                 if (activeTab === 'salesreport' && salesReportStatus === 'idle') loadSalesReport();
             }, [activeTab, salesReportStatus]);
@@ -511,15 +600,31 @@
 
             const [refreshing, setRefreshing] = useState(false);
             const refreshData = (showStatus = false) => {
-                if (typeof google === 'undefined') return;
-                if (!isConfigured) return;
+                if (typeof google === 'undefined' || !isConfigured || dataRefreshInFlight.current) return;
+                dataRefreshInFlight.current = true;
                 if (showStatus) { setRefreshing(true); Toast.fire({ icon: 'info', title: '↻ Refreshing data...' }); }
                 let done = 0;
-                const finish = () => { done++; if (done === 3) { setRefreshing(false); if (showStatus) Toast.fire({ icon: 'success', title: '✅ Data Refreshed!' }); } };
-                const fail = (err) => { done++; if (done === 3) setRefreshing(false); if (showStatus) Toast.fire({ icon: 'error', title: 'Refresh failed: ' + err.message }); };
-                google.script.run.withSuccessHandler(res => { setMasterItems(JSON.parse(res)); finish(); }).withFailureHandler(fail).getProductMasterList();
-                google.script.run.withSuccessHandler(res => { setDashData(JSON.parse(res)); finish(); }).withFailureHandler(fail).getDashboardData();
-                google.script.run.withSuccessHandler(res => { setParties(JSON.parse(res)); finish(); }).withFailureHandler(fail).getPartyList();
+                let hasError = false;
+                const finish = err => {
+                    if (err) hasError = true;
+                    done++;
+                    if (done === 3) {
+                        dataRefreshInFlight.current = false;
+                        setRefreshing(false);
+                        if (showStatus) Toast.fire(hasError ? { icon: 'error', title: 'Refresh failed. Please try again.' } : { icon: 'success', title: '✅ Data Refreshed!' });
+                    }
+                };
+                const load = (method, update) => {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            try { update(JSON.parse(res)); finish(); }
+                            catch (err) { console.error('WMS data refresh failed:', err); finish(err); }
+                        })
+                        .withFailureHandler(err => { console.error('WMS data refresh failed:', err); finish(err); })[method]();
+                };
+                load('getProductMasterList', setMasterItems);
+                load('getDashboardData', setDashData);
+                load('getPartyList', setParties);
             };
 
             const showTodayEntries = (type, baseSheetName, btnKey) => {
@@ -529,7 +634,10 @@
                         .withSuccessHandler(res => {
                             let parsedData = []; try { parsedData = JSON.parse(res); } catch(e) {}
                             if (!parsedData || parsedData.length === 0) Toast.fire({ icon: 'info', title: 'No entries for today!' });
-                            setLogModal({ show: true, title: "Today's " + type, data: parsedData || [] }); setBtn(btnKey, false);
+                            setLogModal({
+                                show: true, title: "Today's " + type, data: parsedData || [],
+                                refreshQuery: { kind: 'today', sheet: baseSheetName }
+                            }); setBtn(btnKey, false);
                         })
                         .withFailureHandler(err => { setBtn(btnKey, false); Toast.fire({ icon: 'error', title: err.message }); })
                         .getTodayLog(baseSheetName);
@@ -542,8 +650,112 @@
                 google.script.run.withSuccessHandler(res => {
                     let data = []; try { data = JSON.parse(res); } catch(e) {}
                     if (data.length === 0) Toast.fire({ icon: 'info', title: 'No Record Found' });
-                    setLogModal({ show: true, title: type + ' (' + historyFromDate + ' to ' + historyToDate + ')', data }); setBtn(btnKey, false);
+                    setLogModal({
+                        show: true, title: type + ' (' + historyFromDate + ' to ' + historyToDate + ')', data,
+                        refreshQuery: { kind: 'range', sheet: baseSheetName, from: historyFromDate, to: historyToDate }
+                    }); setBtn(btnKey, false);
                 }).withFailureHandler(err => { setBtn(btnKey, false); Toast.fire({ icon: 'error', title: err.message }); }).getLogsByDateRange(baseSheetName, historyFromDate, historyToDate);
+            };
+
+            const refreshLogModal = () => {
+                const query = logModal.refreshQuery;
+                if (!logModal.show || !query || logModalRefreshInFlight.current || typeof google === 'undefined') return;
+                logModalRefreshInFlight.current = true;
+                const success = res => {
+                    try {
+                        const data = JSON.parse(res);
+                        setLogModal(current => current.show ? { ...current, data } : current);
+                    } catch (err) {
+                        console.error('Log refresh failed:', err);
+                    } finally {
+                        logModalRefreshInFlight.current = false;
+                    }
+                };
+                const failure = err => {
+                    logModalRefreshInFlight.current = false;
+                    console.error('Log refresh failed:', err);
+                };
+                const request = google.script.run.withSuccessHandler(success).withFailureHandler(failure);
+                if (query.kind === 'today') request.getTodayLog(query.sheet);
+                else request.getLogsByDateRange(query.sheet, query.from, query.to);
+            };
+
+            const searchAllLogs = (query, isAutomatic = false) => {
+                const searchTerm = String(query || '').trim();
+                if (!searchTerm || globalSearchInFlight.current) return;
+                if (!isAutomatic) {
+                    globalSearchRequested.current = searchTerm;
+                    setGlobalResults([]);
+                    setGlobalLoading(true);
+                }
+                globalSearchInFlight.current = true;
+                const sheets = ['SalesLog', 'PurchaseLog', 'TransferLog'];
+                let done = 0, allResults = [];
+                const finish = err => {
+                    if (err) console.error('Global search refresh failed:', err);
+                    done++;
+                    if (done === sheets.length) {
+                        setGlobalResults(allResults);
+                        setGlobalLoading(false);
+                        globalSearchInFlight.current = false;
+                        if (!isAutomatic && allResults.length === 0) Toast.fire({ icon: 'info', title: 'No record found!' });
+                    }
+                };
+                sheets.forEach(sheet => {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            try {
+                                const data = JSON.parse(res);
+                                data.forEach(row => { row._sheet = sheet; });
+                                allResults = [...allResults, ...data];
+                                finish();
+                            } catch (err) { finish(err); }
+                        })
+                        .withFailureHandler(err => finish(err))
+                        .searchRecords(sheet, searchTerm, searchTerm, '', '');
+                });
+            };
+
+            const loadPartyReport = (isAutomatic = false) => {
+                if (!isAutomatic) {
+                    partyReportRequested.current = true;
+                    partyReportQuery.current = { ...partyRepFilters };
+                }
+                if (!partyReportRequested.current || !partyReportQuery.current || partyReportInFlight.current) return;
+                partyReportInFlight.current = true;
+                if (!isAutomatic) { setPartyRepLoading(true); setPartyReport([]); }
+                google.script.run
+                    .withSuccessHandler(res => {
+                        try {
+                            const data = JSON.parse(res);
+                            const partyKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase().replace(/\s/g, '').includes('partyname') || k.toLowerCase() === 'party') : null;
+                            const qtyKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'qty' || k.toLowerCase() === 'quantity') : 'Qty';
+                            const amtKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'amount') : 'Amount';
+                            const profitKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'profit') : 'Profit';
+                            const grouped = {};
+                            data.forEach(row => {
+                                const party = (partyKey ? row[partyKey] : null) || 'Unknown';
+                                if (!grouped[party]) grouped[party] = { party, totalQty: 0, totalAmt: 0, totalProfit: 0, bills: 0 };
+                                grouped[party].totalQty += Number(qtyKey ? row[qtyKey] : 0) || 0;
+                                grouped[party].totalAmt += Number(amtKey ? row[amtKey] : 0) || 0;
+                                grouped[party].totalProfit += Number(profitKey ? row[profitKey] : 0) || 0;
+                                grouped[party].bills++;
+                            });
+                            setPartyReport(Object.values(grouped).sort((a, b) => b.totalAmt - a.totalAmt));
+                        } catch (err) {
+                            console.error('Party report refresh failed:', err);
+                            if (!isAutomatic) Toast.fire({ icon: 'error', title: err.message || 'Could not load party report.' });
+                        } finally {
+                            partyReportInFlight.current = false;
+                            if (!isAutomatic) setPartyRepLoading(false);
+                        }
+                    })
+                    .withFailureHandler(err => {
+                        partyReportInFlight.current = false;
+                        if (!isAutomatic) { setPartyRepLoading(false); Toast.fire({ icon: 'error', title: err.message }); }
+                        else console.error('Party report refresh failed:', err);
+                    })
+                    .searchRecords('SalesLog', partyReportQuery.current.party, '', partyReportQuery.current.from, partyReportQuery.current.to);
             };
 
             // ── Memos ────────────────────────────────────────────────────────────
@@ -792,14 +1004,42 @@
             };
 
             // ── Modify ───────────────────────────────────────────────────────────
-            const handleModifySearch = () => {
-                if (!modifyParty && !modifyProduct && !modifyFromDate && !modifyToDate) return Toast.fire({ icon: 'warning', title: 'Enter search filters!' });
-                setBtn('modifySearch', true); setEditingRow(null);
+            const handleModifySearch = (isAutomatic = false) => {
+                if (!isAutomatic) {
+                    if (!modifyParty && !modifyProduct && !modifyFromDate && !modifyToDate) return Toast.fire({ icon: 'warning', title: 'Enter search filters!' });
+                    modifySearchRequested.current = true;
+                    modifySearchQuery.current = {
+                        sheet: modifySheet, party: modifyParty, product: modifyProduct,
+                        from: modifyFromDate || '', to: modifyToDate || ''
+                    };
+                    setEditingRow(null);
+                }
+                if (!modifySearchRequested.current || !modifySearchQuery.current || modifySearchInFlight.current || (isAutomatic && editingRow)) return;
+                modifySearchInFlight.current = true;
+                if (!isAutomatic) setBtn('modifySearch', true);
                 google.script.run.withSuccessHandler(res => {
-                    let data = []; try { data = JSON.parse(res); } catch(e) {}
-                    setModifyResults(data); setBtn('modifySearch', false);
-                    if (data.length === 0) Toast.fire({ icon: 'info', title: 'No records found!' }); else Toast.fire({ icon: 'success', title: data.length + ' records found' });
-                }).withFailureHandler(err => { setBtn('modifySearch', false); Toast.fire({ icon: 'error', title: err.message }); }).searchRecords(modifySheet, modifyParty, modifyProduct, modifyFromDate || '', modifyToDate || '');
+                    try {
+                        const data = JSON.parse(res);
+                        setModifyResults(data);
+                        if (!isAutomatic) {
+                            if (data.length === 0) Toast.fire({ icon: 'info', title: 'No records found!' });
+                            else Toast.fire({ icon: 'success', title: data.length + ' records found' });
+                        }
+                    } catch (err) {
+                        console.error('Modify search refresh failed:', err);
+                        if (!isAutomatic) Toast.fire({ icon: 'error', title: err.message || 'Could not refresh search results.' });
+                    } finally {
+                        modifySearchInFlight.current = false;
+                        if (!isAutomatic) setBtn('modifySearch', false);
+                    }
+                }).withFailureHandler(err => {
+                    modifySearchInFlight.current = false;
+                    if (!isAutomatic) { setBtn('modifySearch', false); Toast.fire({ icon: 'error', title: err.message }); }
+                    else console.error('Modify search refresh failed:', err);
+                }).searchRecords(
+                    modifySearchQuery.current.sheet, modifySearchQuery.current.party, modifySearchQuery.current.product,
+                    modifySearchQuery.current.from, modifySearchQuery.current.to
+                );
             };
 
             const startEditing = (row) => {
@@ -1023,6 +1263,37 @@
             ];
 
             const switchTab = (id) => { setActiveTab(id); setOrderItems([]); setFormData(prev => ({ ...prev, product: '', qty: '', price: '', warehouse: '', toWarehouse: '', mill: '', billType: 'GST', billNo: '', netBillNo: '', partyName: '', padNo: '', discount: '0', freight: '0', freightRecovered: 'No', insurance: '0', cartage: '0', loading: '0' })); setSearchQuery(''); setPartySearch(''); };
+
+            autoRefreshCallback.current = () => {
+                if (document.visibilityState !== 'visible' || transactionSubmitInFlight.current) return;
+                refreshData();
+                if (activeTab === 'salesreport') loadSalesReport(true);
+                if (logModal.show) refreshLogModal();
+                if (activeTab === 'report') {
+                    if (tallyReportRequested.current) fetchTallyReport(true);
+                    if (ledgerRequested.current) fetchLedger(true);
+                }
+                if (activeTab === 'modify') {
+                    loadModifyOptions();
+                    if (modifySearchRequested.current && !editingRow) handleModifySearch(true);
+                }
+                if (activeTab === 'search' && globalSearchRequested.current) searchAllLogs(globalSearchRequested.current, true);
+                if (activeTab === 'partyreport' && partyReportRequested.current) loadPartyReport(true);
+            };
+            useEffect(() => {
+                const refreshVisibleData = () => {
+                    if (autoRefreshCallback.current) autoRefreshCallback.current();
+                };
+                const handleVisibilityChange = () => {
+                    if (document.visibilityState === 'visible') refreshVisibleData();
+                };
+                const interval = window.setInterval(refreshVisibleData, 30_000);
+                document.addEventListener('visibilitychange', handleVisibilityChange);
+                return () => {
+                    window.clearInterval(interval);
+                    document.removeEventListener('visibilitychange', handleVisibilityChange);
+                };
+            }, []);
 
             return (
                 <div className="flex h-screen overflow-hidden text-slate-900 bg-slate-50 flex-col">
@@ -1522,7 +1793,7 @@
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                             <div className="space-y-1">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Select Log</label>
-                                                <select className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifySheet} onChange={e => { setModifySheet(e.target.value); setModifyParty(''); setModifyProduct(''); setModifyResults([]); setEditingRow(null); setModifyFromDate(''); setModifyToDate(''); }}>
+                                                <select className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifySheet} onChange={e => { setModifySheet(e.target.value); setModifyParty(''); setModifyProduct(''); setModifyResults([]); setEditingRow(null); setModifyFromDate(''); setModifyToDate(''); modifySearchRequested.current = false; modifySearchQuery.current = null; }}>
                                                     <option value="SalesLog">Sales Log</option>
                                                     <option value="PurchaseLog">Purchase Log</option>
                                                     <option value="TransferLog">Transfer Log</option>
@@ -1580,7 +1851,7 @@
                                         <div ref={modifyResultsRef} className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-xl">
                                             <div className="bg-slate-900 p-5 px-8 flex justify-between items-center">
                                                 <h3 className="text-white font-black italic tracking-widest uppercase text-sm">Search Results ({modifyResults.length} records)</h3>
-                                                <button onClick={() => { setModifyResults([]); setEditingRow(null); }} className="text-white bg-rose-500 px-3 py-1 rounded-full text-xs font-bold">Clear ×</button>
+                                                <button onClick={() => { setModifyResults([]); setEditingRow(null); modifySearchRequested.current = false; modifySearchQuery.current = null; }} className="text-white bg-rose-500 px-3 py-1 rounded-full text-xs font-bold">Clear ×</button>
                                             </div>
                                             {editingRow && (
                                                 <div className="bg-amber-50 border-b border-amber-200 px-8 py-3 flex flex-wrap gap-4 items-center">
@@ -1712,7 +1983,7 @@
                                                 <h3 className="font-black italic tracking-widest uppercase text-sm">Stock Summary <span className="text-blue-400">({reportData.length} products)</span></h3>
                                                 <div className="flex gap-2">
                                                     <button onClick={downloadStockReportExcel} disabled={btnLoad.dlSummary} className={`bg-emerald-600 text-white px-4 py-1 rounded-full text-[10px] font-black uppercase shadow-lg disabled:opacity-60 ${btnLoad.dlSummary ? 'btn-spin' : ''}`}>{btnLoad.dlSummary ? '...' : 'Download Excel ⬇'}</button>
-                                                    <button onClick={() => setReportData([])} className="bg-rose-500 text-white px-3 py-1 rounded-full text-xs font-bold">Clear ×</button>
+                                                    <button onClick={() => { setReportData([]); tallyReportRequested.current = false; tallyReportQuery.current = null; }} className="bg-rose-500 text-white px-3 py-1 rounded-full text-xs font-bold">Clear ×</button>
                                                 </div>
                                             </div>
                                             <div className="overflow-x-auto">
@@ -1798,26 +2069,7 @@
                                                         onChange={e => { setGlobalSearch(e.target.value); setShowGlobalDD(true); }}
                                                         onFocus={() => setShowGlobalDD(true)}
                                                         onBlur={() => setTimeout(() => setShowGlobalDD(false), 200)}
-                                                        onKeyDown={e => {
-                                                            if (e.key === 'Enter') {
-                                                                if (!globalSearch.trim()) return;
-                                                                setGlobalLoading(true); setGlobalResults([]);
-                                                                if (typeof google !== 'undefined') {
-                                                                    const sheets = ['SalesLog', 'PurchaseLog', 'TransferLog'];
-                                                                    let done = 0, allResults = [];
-                                                                    sheets.forEach(sheet => {
-                                                                        google.script.run
-                                                                            .withSuccessHandler(res => {
-                                                                                try { const data = JSON.parse(res); data.forEach(row => { row._sheet = sheet; }); allResults = [...allResults, ...data]; } catch(e) {}
-                                                                                done++;
-                                                                                if (done === sheets.length) { setGlobalResults(allResults); setGlobalLoading(false); if (allResults.length === 0) Toast.fire({ icon: 'info', title: 'No record found!' }); }
-                                                                            })
-                                                                            .withFailureHandler(() => { done++; if (done === sheets.length) { setGlobalResults(allResults); setGlobalLoading(false); } })
-                                                                            .searchRecords(sheet, globalSearch, globalSearch, '', '');
-                                                                    });
-                                                                }
-                                                            }
-                                                        }} />
+                                                        onKeyDown={e => { if (e.key === 'Enter') searchAllLogs(globalSearch); }} />
                                                     {showGlobalDD && globalSearch.length >= 1 && (
                                                         <div className="absolute w-full mt-1 bg-white border-2 border-blue-500 rounded-2xl shadow-2xl z-[9999] max-h-56 overflow-y-auto">
                                                             {parties.filter(p => p.toString().toLowerCase().includes(globalSearch.toLowerCase())).slice(0, 4).map((p, i) => (<div key={'p' + i} onMouseDown={() => { setGlobalSearch(p.toString()); setShowGlobalDD(false); }} className="px-4 py-2.5 cursor-pointer hover:bg-blue-600 hover:text-white border-b border-slate-100 flex items-center gap-3"><span className="text-[9px] font-black px-2 py-0.5 bg-blue-100 text-blue-700 rounded-lg">PARTY</span><span className="font-black text-[11px] uppercase">{p}</span></div>))}
@@ -1829,21 +2081,7 @@
                                             <div className="md:col-span-4">
                                                 <button disabled={globalLoading} onClick={() => {
                                                     if (!globalSearch.trim()) return Toast.fire({ icon: 'warning', title: 'Kuch toh likho!' });
-                                                    setGlobalLoading(true); setGlobalResults([]);
-                                                    if (typeof google !== 'undefined') {
-                                                        const sheets = ['SalesLog', 'PurchaseLog', 'TransferLog'];
-                                                        let done = 0, allResults = [];
-                                                        sheets.forEach(sheet => {
-                                                            google.script.run
-                                                                .withSuccessHandler(res => {
-                                                                    try { const data = JSON.parse(res); data.forEach(row => { row._sheet = sheet; }); allResults = [...allResults, ...data]; } catch(e) {}
-                                                                    done++;
-                                                                    if (done === sheets.length) { setGlobalResults(allResults); setGlobalLoading(false); if (allResults.length === 0) Toast.fire({ icon: 'info', title: 'No record found!' }); }
-                                                                })
-                                                                .withFailureHandler(() => { done++; if (done === sheets.length) { setGlobalResults(allResults); setGlobalLoading(false); } })
-                                                                .searchRecords(sheet, globalSearch, globalSearch, '', '');
-                                                        });
-                                                    }
+                                                    searchAllLogs(globalSearch);
                                                 }} className={`w-full p-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg hover:bg-black transition text-sm disabled:opacity-60 ${globalLoading ? 'btn-spin' : ''}`}>
                                                     {globalLoading ? 'Searching...' : 'Search 🔍'}
                                                 </button>
@@ -1900,31 +2138,7 @@
                                                 </div>
                                             </div>
                                             <div className="md:col-span-3">
-                                                <button disabled={partyRepLoading} onClick={() => {
-                                                    setPartyRepLoading(true); setPartyReport([]);
-                                                    if (typeof google !== 'undefined') {
-                                                        google.script.run.withSuccessHandler(res => {
-                                                            try {
-                                                                const data = JSON.parse(res);
-                                                                const partyKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase().replace(/\s/g, '').includes('partyname') || k.toLowerCase() === 'party') : null;
-                                                                const qtyKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'qty' || k.toLowerCase() === 'quantity') : 'Qty';
-                                                                const amtKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'amount') : 'Amount';
-                                                                const profitKey = data.length > 0 ? Object.keys(data[0]).find(k => k.toLowerCase() === 'profit') : 'Profit';
-                                                                const grouped = {};
-                                                                data.forEach(row => {
-                                                                    const party = (partyKey ? row[partyKey] : null) || 'Unknown';
-                                                                    if (!grouped[party]) grouped[party] = { party, totalQty: 0, totalAmt: 0, totalProfit: 0, bills: 0 };
-                                                                    grouped[party].totalQty += Number(qtyKey ? row[qtyKey] : 0) || 0;
-                                                                    grouped[party].totalAmt += Number(amtKey ? row[amtKey] : 0) || 0;
-                                                                    grouped[party].totalProfit += Number(profitKey ? row[profitKey] : 0) || 0;
-                                                                    grouped[party].bills++;
-                                                                });
-                                                                setPartyReport(Object.values(grouped).sort((a, b) => b.totalAmt - a.totalAmt));
-                                                            } catch(e) {}
-                                                            setPartyRepLoading(false);
-                                                        }).withFailureHandler(err => { setPartyRepLoading(false); Toast.fire({ icon: 'error', title: err.message }); }).searchRecords('SalesLog', partyRepFilters.party, '', partyRepFilters.from, partyRepFilters.to);
-                                                    }
-                                                }} className={`w-full p-3 bg-blue-600 text-white rounded-xl font-black uppercase shadow-lg text-sm ${partyRepLoading ? 'btn-spin' : ''}`}>
+                                                <button disabled={partyRepLoading} onClick={() => loadPartyReport()} className={`w-full p-3 bg-blue-600 text-white rounded-xl font-black uppercase shadow-lg text-sm ${partyRepLoading ? 'btn-spin' : ''}`}>
                                                     {partyRepLoading ? 'Loading...' : 'Load Report 📊'}
                                                 </button>
                                             </div>
