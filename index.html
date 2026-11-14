@@ -2098,28 +2098,40 @@
                                                             </tr>
                                                         </thead>
                                                         <tbody className="divide-y divide-slate-100">
-                                                            {salesReportTableRows.length ? salesReportTableRows.map((row, index) => (
-                                                                <tr key={`${row.monthKey}-${row.name}-${index}`} className="hover:bg-blue-50">
-                                                                    <td className="p-3 text-slate-500 whitespace-nowrap">{row.month}</td>
-                                                                    <td className="p-3 font-bold text-slate-800">{row.name}</td>
-                                                                    {salesReportView === 'po' && <>
-                                                                        <td className="p-3 font-semibold whitespace-pre-line">{row.partyNames}</td>
-                                                                        <td className="p-3 whitespace-pre-line">{row.items}</td>
-                                                                        <td className="p-3 text-right whitespace-pre-line">{row.itemQtys}</td>
-                                                                        <td className="p-3 text-right whitespace-pre-line">{row.itemRates}</td>
-                                                                        <td className="p-3 text-right whitespace-pre-line">{row.itemBuyPrices}</td>
-                                                                    </>}
-                                                                    {salesReportView === 'product' && <>
-                                                                        <td className="p-3 text-right whitespace-nowrap">{row.salePrice === null ? '-' : `₹${n2(row.salePrice, true)}`}</td>
-                                                                        <td className="p-3 text-right whitespace-nowrap">{row.buyPrice === null ? '-' : `₹${n2(row.buyPrice, true)}`}</td>
-                                                                    </>}
-                                                                    <td className="p-3 text-right whitespace-nowrap">₹{n2(row.revenue, true)}</td>
-                                                                    <td className="p-3 text-right">{row.pctRevenue.toFixed(2)}%</td>
-                                                                    <td className="p-3 text-right whitespace-nowrap">₹{n2(row.variableCost, true)}</td>
-                                                                    <td className="p-3 text-right font-black text-emerald-700 whitespace-nowrap">₹{n2(row.totalGP, true)}</td>
-                                                                    <td className="p-3 text-right"><span className={`px-2 py-1 rounded-full font-bold ${row.pctGP < 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{row.pctGP.toFixed(2)}%</span></td>
-                                                                </tr>
-                                                            )) : (
+                                                            {salesReportTableRows.length ? salesReportTableRows.flatMap((row, index) => {
+                                                                const detailRows = salesReportView === 'po' && row.partyItems.length ? row.partyItems : [null];
+                                                                return detailRows.map((item, itemIndex) => {
+                                                                    const isFirstRow = itemIndex === 0;
+                                                                    const isFirstPartyRow = item && (itemIndex === 0 || row.partyItems[itemIndex - 1].party !== item.party);
+                                                                    let partyRowSpan = 1;
+                                                                    if (isFirstPartyRow) {
+                                                                        while (itemIndex + partyRowSpan < row.partyItems.length &&
+                                                                            row.partyItems[itemIndex + partyRowSpan].party === item.party) partyRowSpan++;
+                                                                    }
+                                                                    return (
+                                                                        <tr key={`${row.monthKey}-${row.name}-${index}-${itemIndex}`} className="hover:bg-blue-50">
+                                                                            {isFirstRow && <td rowSpan={detailRows.length} className="p-3 text-slate-500 whitespace-nowrap">{row.month}</td>}
+                                                                            {isFirstRow && <td rowSpan={detailRows.length} className="p-3 font-bold text-slate-800">{row.name}</td>}
+                                                                            {salesReportView === 'po' && <>
+                                                                                {item ? (isFirstPartyRow && <td rowSpan={partyRowSpan} className="p-3 font-semibold">{item.party}</td>) : <td className="p-3 font-semibold">-</td>}
+                                                                                <td className="p-3">{item ? item.item : '-'}</td>
+                                                                                <td className="p-3 text-right">{item ? n2(item.qty) : '-'}</td>
+                                                                                <td className="p-3 text-right">{item && item.rate !== null ? `₹${n2(item.rate, true)}` : '-'}</td>
+                                                                                <td className="p-3 text-right">{item && item.buyPrice !== null ? `₹${n2(item.buyPrice, true)}` : '-'}</td>
+                                                                            </>}
+                                                                            {isFirstRow && salesReportView === 'product' && <>
+                                                                                <td className="p-3 text-right whitespace-nowrap">{row.salePrice === null ? '-' : `₹${n2(row.salePrice, true)}`}</td>
+                                                                                <td className="p-3 text-right whitespace-nowrap">{row.buyPrice === null ? '-' : `₹${n2(row.buyPrice, true)}`}</td>
+                                                                            </>}
+                                                                            {isFirstRow && <td rowSpan={detailRows.length} className="p-3 text-right whitespace-nowrap">₹{n2(row.revenue, true)}</td>}
+                                                                            {isFirstRow && <td rowSpan={detailRows.length} className="p-3 text-right">{row.pctRevenue.toFixed(2)}%</td>}
+                                                                            {isFirstRow && <td rowSpan={detailRows.length} className="p-3 text-right whitespace-nowrap">₹{n2(row.variableCost, true)}</td>}
+                                                                            {isFirstRow && <td rowSpan={detailRows.length} className="p-3 text-right font-black text-emerald-700 whitespace-nowrap">₹{n2(row.totalGP, true)}</td>}
+                                                                            {isFirstRow && <td rowSpan={detailRows.length} className="p-3 text-right"><span className={`px-2 py-1 rounded-full font-bold ${row.pctGP < 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{row.pctGP.toFixed(2)}%</span></td>}
+                                                                        </tr>
+                                                                    );
+                                                                });
+                                                            }) : (
                                                                 <tr><td colSpan={salesReportView === 'po' ? 12 : salesReportView === 'product' ? 9 : 7} className="p-12 text-center text-slate-400 font-bold">No data for the selected filters.</td></tr>
                                                             )}
                                                         </tbody>
