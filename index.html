@@ -233,7 +233,6 @@
             const amount = reportNumber(reportField(row, ['Amount', 'Revenue']));
             const profit = reportNumber(reportField(row, ['Profit', 'Gross Profit', 'Total GP']));
             const rateValue = reportField(row, ['Rate']);
-            const costPriceValue = reportField(row, ['Cost Price']);
             return {
                 ...row,
                 _reportMonthKey: month.key,
@@ -247,7 +246,6 @@
                 _reportBill: String(reportField(row, ['Bill No', 'Bill No.']) || ''),
                 _reportQty: reportNumber(reportField(row, ['Qty', 'Quantity'])),
                 _reportRate: rateValue === '' || rateValue === null || rateValue === undefined ? null : reportNumber(rateValue),
-                _reportCostPrice: costPriceValue === '' || costPriceValue === null || costPriceValue === undefined ? null : reportNumber(costPriceValue),
                 _reportRevenue: amount,
                 _reportProfit: profit,
                 _reportVariableCost: amount - profit
@@ -947,24 +945,17 @@
                     const key = `${row._reportMonthKey}||${String(name).toLowerCase()}`;
                     if (!grouped.has(key)) grouped.set(key, {
                         month: row._reportMonth, monthKey: row._reportMonthKey, name,
-                        revenue: 0, variableCost: 0, totalGP: 0, totalQty: 0,
-                        rateTotal: 0, rateQty: 0, costPriceTotal: 0, costPriceQty: 0,
+                        revenue: 0, variableCost: 0, totalGP: 0,
                         partyItems: []
                     });
                     const group = grouped.get(key);
                     group.revenue += row._reportRevenue;
                     group.variableCost += row._reportVariableCost;
                     group.totalGP += row._reportProfit;
-                    group.totalQty += row._reportQty;
-                    if (row._reportRate !== null) {
-                        group.rateTotal += row._reportRate * row._reportQty;
-                        group.rateQty += row._reportQty;
-                    }
-                    if (row._reportCostPrice !== null) {
-                        group.costPriceTotal += row._reportCostPrice * row._reportQty;
-                        group.costPriceQty += row._reportQty;
-                    }
-                    if (salesReportView === 'po') group.partyItems.push({ party: row._reportParty, item: row._reportProduct });
+                    if (salesReportView === 'po') group.partyItems.push({
+                        party: row._reportParty, item: row._reportProduct,
+                        qty: row._reportQty, rate: row._reportRate
+                    });
                 });
                 const rows = [...grouped.values()];
                 const totals = salesReportFilteredRows.reduce((result, row) => ({
@@ -981,11 +972,12 @@
                         );
                         return {
                             ...row,
+                            pctRevenue: totals.revenue ? row.revenue / totals.revenue * 100 : 0,
                             pctGP: row.revenue ? row.totalGP / row.revenue * 100 : 0,
-                            rate: row.rateQty ? row.rateTotal / row.rateQty : null,
-                            costPrice: row.costPriceQty ? row.costPriceTotal / row.costPriceQty : null,
                             partyNames: partyItems.map(item => item.party).join('\n'),
-                            items: partyItems.map(item => item.item).join('\n')
+                            items: partyItems.map(item => item.item).join('\n'),
+                            itemQtys: partyItems.map(item => n2(item.qty)).join('\n'),
+                            itemRates: partyItems.map(item => item.rate === null ? '-' : `₹${n2(item.rate, true)}`).join('\n')
                         };
                     })
                 };
@@ -2045,11 +2037,11 @@
                                                                     ...(salesReportView === 'po' ? [
                                                                         { key: 'partyNames', label: 'Party Name', value: row => row.partyNames, numeric: false },
                                                                         { key: 'items', label: 'Item', value: row => row.items, numeric: false },
-                                                                        { key: 'totalQty', label: 'Qty', value: row => n2(row.totalQty), numeric: true }
+                                                                        { key: 'itemQtys', label: 'Qty', value: row => row.itemQtys, numeric: false },
+                                                                        { key: 'itemRates', label: 'Rate (₹/unit)', value: row => row.itemRates, numeric: false }
                                                                     ] : []),
-                                                                    { key: 'rate', label: 'Avg Rate (₹/unit)', value: row => row.rate === null ? '-' : `₹${n2(row.rate, true)}`, numeric: true },
-                                                                    { key: 'costPrice', label: 'Avg Cost Price (₹/unit)', value: row => row.costPrice === null ? '-' : `₹${n2(row.costPrice, true)}`, numeric: true },
                                                                     { key: 'revenue', label: 'Revenue (₹)', value: row => `₹${n2(row.revenue, true)}`, numeric: true },
+                                                                    { key: 'pctRevenue', label: '% Revenue', value: row => `${row.pctRevenue.toFixed(2)}%`, numeric: true },
                                                                     { key: 'variableCost', label: 'Variable Cost (₹)', value: row => `₹${n2(row.variableCost, true)}`, numeric: true },
                                                                     { key: 'totalGP', label: 'Total GP (₹)', value: row => `₹${n2(row.totalGP, true)}`, numeric: true },
                                                                     { key: 'pctGP', label: '% GP', value: row => `${row.pctGP.toFixed(2)}%`, numeric: true }
@@ -2071,17 +2063,17 @@
                                                                     {salesReportView === 'po' && <>
                                                                         <td className="p-3 font-semibold whitespace-pre-line">{row.partyNames}</td>
                                                                         <td className="p-3 whitespace-pre-line">{row.items}</td>
-                                                                        <td className="p-3 text-right">{n2(row.totalQty)}</td>
+                                                                        <td className="p-3 text-right whitespace-pre-line">{row.itemQtys}</td>
+                                                                        <td className="p-3 text-right whitespace-pre-line">{row.itemRates}</td>
                                                                     </>}
-                                                                    <td className="p-3 text-right whitespace-nowrap">{row.rate === null ? '-' : `₹${n2(row.rate, true)}`}</td>
-                                                                    <td className="p-3 text-right whitespace-nowrap">{row.costPrice === null ? '-' : `₹${n2(row.costPrice, true)}`}</td>
                                                                     <td className="p-3 text-right whitespace-nowrap">₹{n2(row.revenue, true)}</td>
+                                                                    <td className="p-3 text-right">{row.pctRevenue.toFixed(2)}%</td>
                                                                     <td className="p-3 text-right whitespace-nowrap">₹{n2(row.variableCost, true)}</td>
                                                                     <td className="p-3 text-right font-black text-emerald-700 whitespace-nowrap">₹{n2(row.totalGP, true)}</td>
                                                                     <td className="p-3 text-right"><span className={`px-2 py-1 rounded-full font-bold ${row.pctGP < 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{row.pctGP.toFixed(2)}%</span></td>
                                                                 </tr>
                                                             )) : (
-                                                                <tr><td colSpan={salesReportView === 'po' ? 11 : 8} className="p-12 text-center text-slate-400 font-bold">No data for the selected filters.</td></tr>
+                                                                <tr><td colSpan={salesReportView === 'po' ? 11 : 7} className="p-12 text-center text-slate-400 font-bold">No data for the selected filters.</td></tr>
                                                             )}
                                                         </tbody>
                                                     </table>
