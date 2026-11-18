@@ -299,7 +299,13 @@
             const [modifyFromDate, setModifyFromDate] = useState('');
             const [modifyToDate, setModifyToDate] = useState('');
             const [modifyDatePreset, setModifyDatePreset] = useState('');
+            const modifySheetInputRef = useRef(null);
+            const modifyPartyInputRef = useRef(null);
+            const modifyProductInputRef = useRef(null);
+            const modifyFromDateInputRef = useRef(null);
+            const modifyToDateInputRef = useRef(null);
             const [modifyResults, setModifyResults] = useState([]);
+            const [modifySearchMessage, setModifySearchMessage] = useState('');
             const [editingRow, setEditingRow] = useState(null);
             const [editValues, setEditValues] = useState({});
             const [sheetParties, setSheetParties] = useState([]);
@@ -1009,14 +1015,21 @@
             };
 
             // ── Modify ───────────────────────────────────────────────────────────
+            const getModifyFilters = () => ({
+                sheet: modifySheetInputRef.current ? modifySheetInputRef.current.value : modifySheet,
+                party: modifyPartyInputRef.current ? modifyPartyInputRef.current.value : modifyParty,
+                product: modifyProductInputRef.current ? modifyProductInputRef.current.value : modifyProduct,
+                from: modifyFromDateInputRef.current ? modifyFromDateInputRef.current.value : modifyFromDate,
+                to: modifyToDateInputRef.current ? modifyToDateInputRef.current.value : modifyToDate
+            });
+
             const handleModifySearch = (isAutomatic = false) => {
                 if (!isAutomatic) {
-                    if (!modifyParty && !modifyProduct && !modifyFromDate && !modifyToDate) return Toast.fire({ icon: 'warning', title: 'Enter search filters!' });
+                    const filters = getModifyFilters();
+                    if (!filters.party && !filters.product && !filters.from && !filters.to) return Toast.fire({ icon: 'warning', title: 'Enter search filters!' });
                     modifySearchRequested.current = true;
-                    modifySearchQuery.current = {
-                        sheet: modifySheet, party: modifyParty, product: modifyProduct,
-                        from: modifyFromDate || '', to: modifyToDate || ''
-                    };
+                    modifySearchQuery.current = filters;
+                    setModifySearchMessage('Searching records...');
                     setEditingRow(null);
                 }
                 if (!modifySearchRequested.current || !modifySearchQuery.current || modifySearchInFlight.current || (isAutomatic && editingRow)) return;
@@ -1027,12 +1040,16 @@
                         const data = JSON.parse(res);
                         setModifyResults(data);
                         if (!isAutomatic) {
+                            setModifySearchMessage(data.length === 0 ? 'No records found for these filters.' : `${data.length} records found.`);
                             if (data.length === 0) Toast.fire({ icon: 'info', title: 'No records found!' });
                             else Toast.fire({ icon: 'success', title: data.length + ' records found' });
                         }
                     } catch (err) {
                         console.error('Modify search refresh failed:', err);
-                        if (!isAutomatic) Toast.fire({ icon: 'error', title: err.message || 'Could not refresh search results.' });
+                        if (!isAutomatic) {
+                            setModifySearchMessage('Search failed. Please try again.');
+                            Toast.fire({ icon: 'error', title: err.message || 'Could not refresh search results.' });
+                        }
                     } finally {
                         modifySearchInFlight.current = false;
                         if (!isAutomatic) setBtn('modifySearch', false);
@@ -1040,7 +1057,11 @@
                 };
                 const searchFailure = err => {
                     modifySearchInFlight.current = false;
-                    if (!isAutomatic) { setBtn('modifySearch', false); Toast.fire({ icon: 'error', title: err.message }); }
+                    if (!isAutomatic) {
+                        setBtn('modifySearch', false);
+                        setModifySearchMessage('Search failed. Please try again.');
+                        Toast.fire({ icon: 'error', title: err.message || 'Could not refresh search results.' });
+                    }
                     else console.error('Modify search refresh failed:', err);
                 };
                 const query = modifySearchQuery.current;
@@ -1060,6 +1081,7 @@
                 setModifyFromDate(toLocalDateInput(from));
                 setModifyToDate(toLocalDateInput(today));
                 setModifyDatePreset(preset);
+                setModifySearchMessage('');
             };
 
             const startEditing = (row) => {
@@ -1819,7 +1841,7 @@
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                             <div className="space-y-1">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Select Log</label>
-                                                <select className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifySheet} onChange={e => { setModifySheet(e.target.value); setModifyParty(''); setModifyProduct(''); setModifyResults([]); setEditingRow(null); setModifyFromDate(''); setModifyToDate(''); setModifyDatePreset(''); modifySearchRequested.current = false; modifySearchQuery.current = null; }}>
+                                                <select ref={modifySheetInputRef} className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifySheet} onChange={e => { setModifySheet(e.target.value); setModifyParty(''); setModifyProduct(''); setModifyResults([]); setModifySearchMessage(''); setEditingRow(null); setModifyFromDate(''); setModifyToDate(''); setModifyDatePreset(''); modifySearchRequested.current = false; modifySearchQuery.current = null; }}>
                                                     <option value="SalesLog">Sales Log</option>
                                                     <option value="PurchaseLog">Purchase Log</option>
                                                     <option value="TransferLog">Transfer Log</option>
@@ -1829,8 +1851,8 @@
                                                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2">
                                                     {modifySheet === 'TransferLog' ? 'From/To Location' : modifySheet === 'PurchaseLog' ? 'Mill Name' : 'Party Name'} <span className="text-blue-500">(optional)</span>
                                                 </label>
-                                                <input className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner uppercase" placeholder={modifySheet === 'TransferLog' ? 'Type location...' : modifySheet === 'PurchaseLog' ? 'Type mill...' : 'Type party...'} value={modifyParty} autoComplete="off"
-                                                    onChange={e => { setModifyParty(e.target.value); setShowModifyPartyDD(true); }}
+                                                <input ref={modifyPartyInputRef} className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner uppercase" placeholder={modifySheet === 'TransferLog' ? 'Type location...' : modifySheet === 'PurchaseLog' ? 'Type mill...' : 'Type party...'} value={modifyParty} autoComplete="off"
+                                                    onChange={e => { setModifyParty(e.target.value); setModifySearchMessage(''); setShowModifyPartyDD(true); }}
                                                     onFocus={() => { if (modifyParty.length > 0) setShowModifyPartyDD(true); }}
                                                     onBlur={() => setTimeout(() => setShowModifyPartyDD(false), 200)} />
                                                 {showModifyPartyDD && (
@@ -1842,8 +1864,8 @@
                                             </div>
                                             <div className="space-y-1 relative">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Product Name <span className="text-blue-500">(optional)</span></label>
-                                                <input className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner uppercase" placeholder="Type product..." value={modifyProduct} autoComplete="off"
-                                                    onChange={e => { setModifyProduct(e.target.value); setShowModifyProductDD(true); }}
+                                                <input ref={modifyProductInputRef} className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner uppercase" placeholder="Type product..." value={modifyProduct} autoComplete="off"
+                                                    onChange={e => { setModifyProduct(e.target.value); setModifySearchMessage(''); setShowModifyProductDD(true); }}
                                                     onFocus={() => { if (modifyProduct.length > 0) setShowModifyProductDD(true); }}
                                                     onBlur={() => setTimeout(() => setShowModifyProductDD(false), 200)} />
                                                 {showModifyProductDD && (
@@ -1855,29 +1877,30 @@
                                             </div>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">From Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyFromDate} onChange={e => { setModifyFromDate(e.target.value); setModifyDatePreset(''); }} /></div>
-                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">To Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyToDate} onChange={e => { setModifyToDate(e.target.value); setModifyDatePreset(''); }} /></div>
+                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">From Date</label><input ref={modifyFromDateInputRef} type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyFromDate} onChange={e => { setModifyFromDate(e.target.value); setModifyDatePreset(''); setModifySearchMessage(''); }} /></div>
+                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">To Date</label><input ref={modifyToDateInputRef} type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyToDate} onChange={e => { setModifyToDate(e.target.value); setModifyDatePreset(''); setModifySearchMessage(''); }} /></div>
                                             <div className="md:col-span-3 flex flex-wrap gap-1 items-end pb-1">
                                                 {[
                                                     { label: 'Today', preset: 'today', fn: () => setModifyDateRange(0, 'today') },
                                                     { label: '7 Days', preset: '7', fn: () => setModifyDateRange(7, '7') },
                                                     { label: '30 Days', preset: '30', fn: () => setModifyDateRange(30, '30') },
-                                                    { label: 'Clear', preset: '', fn: () => { setModifyFromDate(''); setModifyToDate(''); setModifyDatePreset(''); } },
+                                                    { label: 'Clear', preset: '', fn: () => { setModifyFromDate(''); setModifyToDate(''); setModifyDatePreset(''); setModifySearchMessage(''); } },
                                                 ].map(q => <button key={q.label} type="button" aria-pressed={modifyDatePreset === q.preset && q.preset !== ''} onClick={q.fn} className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase transition ${modifyDatePreset === q.preset && q.preset !== '' ? 'bg-blue-600 text-white shadow-inner' : 'bg-slate-100 hover:bg-slate-900 hover:text-white'}`}>{q.label}</button>)}
                                             </div>
                                             <div className="md:col-span-3">
-                                                <button type="button" onClick={handleModifySearch} disabled={btnLoad.modifySearch} className={`w-full p-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg hover:bg-black transition tracking-widest text-sm disabled:opacity-60 ${btnLoad.modifySearch ? 'btn-spin' : ''}`}>
+                                                <button type="button" aria-busy={btnLoad.modifySearch} onClick={() => handleModifySearch()} disabled={btnLoad.modifySearch} className={`w-full p-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg hover:bg-black transition tracking-widest text-sm disabled:opacity-60 ${btnLoad.modifySearch ? 'btn-spin' : ''}`}>
                                                     {btnLoad.modifySearch ? 'Searching...' : 'Search 🔍'}
                                                 </button>
                                             </div>
                                         </div>
+                                        {modifySearchMessage && <p role="status" aria-live="polite" className={`text-center text-sm font-bold ${modifySearchMessage.startsWith('Search failed') ? 'text-rose-600' : 'text-slate-600'}`}>{modifySearchMessage}</p>}
                                     </div>
 
                                     {modifyResults.length > 0 && (
                                         <div ref={modifyResultsRef} className="bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-xl">
                                             <div className="bg-slate-900 p-5 px-8 flex justify-between items-center">
                                                 <h3 className="text-white font-black italic tracking-widest uppercase text-sm">Search Results ({modifyResults.length} records)</h3>
-                                                <button onClick={() => { setModifyResults([]); setEditingRow(null); modifySearchRequested.current = false; modifySearchQuery.current = null; }} className="text-white bg-rose-500 px-3 py-1 rounded-full text-xs font-bold">Clear ×</button>
+                                                <button onClick={() => { setModifyResults([]); setModifySearchMessage(''); setEditingRow(null); modifySearchRequested.current = false; modifySearchQuery.current = null; }} className="text-white bg-rose-500 px-3 py-1 rounded-full text-xs font-bold">Clear ×</button>
                                             </div>
                                             {editingRow && (
                                                 <div className="bg-amber-50 border-b border-amber-200 px-8 py-3 flex flex-wrap gap-4 items-center">
