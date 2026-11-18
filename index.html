@@ -46,6 +46,10 @@
         @keyframes net-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,0.4); } 50% { box-shadow: 0 0 0 8px rgba(245,158,11,0); } }
         .frozen-badge { display: inline-block; font-size: 8px; font-weight: 900; letter-spacing: 1px; padding: 2px 6px; border-radius: 6px; background: #e0f2fe; color: #0369a1; vertical-align: middle; }
         .api-banner { background: linear-gradient(90deg, #b45309, #d97706); color: white; padding: 8px 16px; font-size: 12px; font-weight: bold; text-align: center; }
+        button:not(:disabled) { cursor: pointer; }
+        button:not(:disabled):active { transform: translateY(1px) scale(0.98); filter: brightness(0.9); }
+        button:focus-visible { outline: 3px solid #38bdf8; outline-offset: 3px; }
+        button:disabled { cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -294,6 +298,7 @@
             const [modifyProduct, setModifyProduct] = useState('');
             const [modifyFromDate, setModifyFromDate] = useState('');
             const [modifyToDate, setModifyToDate] = useState('');
+            const [modifyDatePreset, setModifyDatePreset] = useState('');
             const [modifyResults, setModifyResults] = useState([]);
             const [editingRow, setEditingRow] = useState(null);
             const [editValues, setEditValues] = useState({});
@@ -1017,7 +1022,7 @@
                 if (!modifySearchRequested.current || !modifySearchQuery.current || modifySearchInFlight.current || (isAutomatic && editingRow)) return;
                 modifySearchInFlight.current = true;
                 if (!isAutomatic) setBtn('modifySearch', true);
-                google.script.run.withSuccessHandler(res => {
+                const searchSuccess = res => {
                     try {
                         const data = JSON.parse(res);
                         setModifyResults(data);
@@ -1032,14 +1037,29 @@
                         modifySearchInFlight.current = false;
                         if (!isAutomatic) setBtn('modifySearch', false);
                     }
-                }).withFailureHandler(err => {
+                };
+                const searchFailure = err => {
                     modifySearchInFlight.current = false;
                     if (!isAutomatic) { setBtn('modifySearch', false); Toast.fire({ icon: 'error', title: err.message }); }
                     else console.error('Modify search refresh failed:', err);
-                }).searchRecords(
-                    modifySearchQuery.current.sheet, modifySearchQuery.current.party, modifySearchQuery.current.product,
-                    modifySearchQuery.current.from, modifySearchQuery.current.to
-                );
+                };
+                const query = modifySearchQuery.current;
+                const request = google.script.run.withSuccessHandler(searchSuccess).withFailureHandler(searchFailure);
+                if (!query.party && !query.product) {
+                    request.getLogsByDateRange(query.sheet, query.from, query.to);
+                } else {
+                    request.searchRecords(query.sheet, query.party, query.product, query.from, query.to);
+                }
+            };
+
+            const toLocalDateInput = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            const setModifyDateRange = (days, preset) => {
+                const today = new Date();
+                const from = new Date(today);
+                if (days !== 0) from.setDate(today.getDate() - days);
+                setModifyFromDate(toLocalDateInput(from));
+                setModifyToDate(toLocalDateInput(today));
+                setModifyDatePreset(preset);
             };
 
             const startEditing = (row) => {
@@ -1049,30 +1069,36 @@
             };
 
             const handleEditValueChange = (key, value) => {
-                const newVals = { ...editValues, [key]: value };
-                if (modifySheet === 'SalesLog') {
-                    if (['Qty', 'Rate', 'Discount', 'Freight', 'Recovered?', 'Cost Price'].includes(key)) {
+                setEditValues(prev => {
+                    const newVals = { ...prev, [key]: value };
+                    if (modifySheet === 'SalesLog' && ['Qty', 'Rate', 'Discount', 'Freight', 'Recovered?', 'Cost Price'].includes(key)) {
                         const qty = Number(newVals['Qty']) || 0, rate = Number(newVals['Rate']) || 0, disc = Number(newVals['Discount']) || 0;
                         const amt = (qty * rate) - disc; newVals['Amount'] = amt;
                         const freight = Number(newVals['Freight']) || 0, isRec = String(newVals['Recovered?']).toLowerCase().trim() === 'yes', cp = Number(newVals['Cost Price']) || 0;
                         newVals['Profit'] = Number((amt - (qty * cp) - (isRec ? 0 : freight)).toFixed(2));
                     }
-                }
-                if (modifySheet === 'PurchaseLog') {
-                    if (['Qty', 'Price'].includes(key)) newVals['Amount'] = (Number(newVals['Qty']) || 0) * (Number(newVals['Price']) || 0);
-                }
-                setEditValues(newVals);
+                    if (modifySheet === 'PurchaseLog' && ['Qty', 'Price'].includes(key)) {
+                        newVals['Amount'] = (Number(newVals['Qty']) || 0) * (Number(newVals['Price']) || 0);
+                    }
+                    return newVals;
+                });
             };
 
             const saveEdit = () => {
                 if (!editingRow || !editingRow._sheetRow) return;
                 setBtn('saveEdit', true);
                 const actualSheet = editingRow._sheetName || modifySheet;
+                const numericFields = new Set(['Qty', 'Rate', 'Discount', 'Amount', 'Freight', 'Cost Price', 'Profit', 'Qty (KG)', 'Price']);
+                const valuesToSave = Object.fromEntries(Object.entries(editValues).map(([key, value]) => {
+                    if (!numericFields.has(key) || value === '') return [key, value];
+                    const number = Number(value);
+                    return [key, Number.isFinite(number) ? number : value];
+                }));
                 google.script.run.withSuccessHandler(res => {
-                    if (res.status === 'success') { Toast.fire({ icon: 'success', title: res.message }); setEditingRow(null); handleModifySearch(); refreshData(); }
-                    else Toast.fire({ icon: 'error', title: res.message });
+                    if (res && res.status === 'success') { Toast.fire({ icon: 'success', title: res.message }); setEditingRow(null); handleModifySearch(); refreshData(); }
+                    else Toast.fire({ icon: 'error', title: res && res.message ? res.message : 'Could not save this record.' });
                     setBtn('saveEdit', false);
-                }).withFailureHandler(err => { setBtn('saveEdit', false); Toast.fire({ icon: 'error', title: err.message }); }).updateRecord(actualSheet, editingRow._sheetRow, JSON.stringify(editValues));
+                }).withFailureHandler(err => { setBtn('saveEdit', false); Toast.fire({ icon: 'error', title: err.message || 'Could not save this record.' }); }).updateRecord(actualSheet, editingRow._sheetRow, JSON.stringify(valuesToSave));
             };
 
             const deleteEntry = (row) => {
@@ -1793,7 +1819,7 @@
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                             <div className="space-y-1">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Select Log</label>
-                                                <select className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifySheet} onChange={e => { setModifySheet(e.target.value); setModifyParty(''); setModifyProduct(''); setModifyResults([]); setEditingRow(null); setModifyFromDate(''); setModifyToDate(''); modifySearchRequested.current = false; modifySearchQuery.current = null; }}>
+                                                <select className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifySheet} onChange={e => { setModifySheet(e.target.value); setModifyParty(''); setModifyProduct(''); setModifyResults([]); setEditingRow(null); setModifyFromDate(''); setModifyToDate(''); setModifyDatePreset(''); modifySearchRequested.current = false; modifySearchQuery.current = null; }}>
                                                     <option value="SalesLog">Sales Log</option>
                                                     <option value="PurchaseLog">Purchase Log</option>
                                                     <option value="TransferLog">Transfer Log</option>
@@ -1829,18 +1855,18 @@
                                             </div>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">From Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyFromDate} onChange={e => setModifyFromDate(e.target.value)} /></div>
-                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">To Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyToDate} onChange={e => setModifyToDate(e.target.value)} /></div>
+                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">From Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyFromDate} onChange={e => { setModifyFromDate(e.target.value); setModifyDatePreset(''); }} /></div>
+                                            <div className="md:col-span-3 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">To Date</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-bold shadow-inner" value={modifyToDate} onChange={e => { setModifyToDate(e.target.value); setModifyDatePreset(''); }} /></div>
                                             <div className="md:col-span-3 flex flex-wrap gap-1 items-end pb-1">
                                                 {[
-                                                    { label: 'Today', fn: () => { const t = new Date().toISOString().split('T')[0]; setModifyFromDate(t); setModifyToDate(t); } },
-                                                    { label: '7 Days', fn: () => { const t = new Date(); const f = new Date(t); f.setDate(t.getDate() - 7); setModifyFromDate(f.toISOString().split('T')[0]); setModifyToDate(t.toISOString().split('T')[0]); } },
-                                                    { label: '30 Days', fn: () => { const t = new Date(); const f = new Date(t); f.setDate(t.getDate() - 30); setModifyFromDate(f.toISOString().split('T')[0]); setModifyToDate(t.toISOString().split('T')[0]); } },
-                                                    { label: 'Clear', fn: () => { setModifyFromDate(''); setModifyToDate(''); } },
-                                                ].map(q => <button key={q.label} onClick={q.fn} className="px-3 py-2 bg-slate-100 hover:bg-slate-900 hover:text-white rounded-xl text-[9px] font-black uppercase transition">{q.label}</button>)}
+                                                    { label: 'Today', preset: 'today', fn: () => setModifyDateRange(0, 'today') },
+                                                    { label: '7 Days', preset: '7', fn: () => setModifyDateRange(7, '7') },
+                                                    { label: '30 Days', preset: '30', fn: () => setModifyDateRange(30, '30') },
+                                                    { label: 'Clear', preset: '', fn: () => { setModifyFromDate(''); setModifyToDate(''); setModifyDatePreset(''); } },
+                                                ].map(q => <button key={q.label} type="button" aria-pressed={modifyDatePreset === q.preset && q.preset !== ''} onClick={q.fn} className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase transition ${modifyDatePreset === q.preset && q.preset !== '' ? 'bg-blue-600 text-white shadow-inner' : 'bg-slate-100 hover:bg-slate-900 hover:text-white'}`}>{q.label}</button>)}
                                             </div>
                                             <div className="md:col-span-3">
-                                                <button onClick={handleModifySearch} disabled={btnLoad.modifySearch} className={`w-full p-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg hover:bg-black transition tracking-widest text-sm disabled:opacity-60 ${btnLoad.modifySearch ? 'btn-spin' : ''}`}>
+                                                <button type="button" onClick={handleModifySearch} disabled={btnLoad.modifySearch} className={`w-full p-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg hover:bg-black transition tracking-widest text-sm disabled:opacity-60 ${btnLoad.modifySearch ? 'btn-spin' : ''}`}>
                                                     {btnLoad.modifySearch ? 'Searching...' : 'Search 🔍'}
                                                 </button>
                                             </div>
@@ -1901,7 +1927,11 @@
                                                                             {!hasField ? (<span className="text-slate-300">–</span>) : isEditing && key !== 'Date' ? (() => {
                                                                                 if (['Warehouse', 'From', 'To'].includes(key)) return (<select className="w-full min-w-[140px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)}><option value="">-- Select --</option>{WAREHOUSES.map(w => <option key={w} value={w}>{w}</option>)}</select>);
                                                                                 if (key === 'Bill Type' || key === 'BillType') return (<select className="w-full min-w-[110px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)}><option value="GST">GST</option><option value="NON-GST">NON-GST</option></select>);
-                                                                                if (key === 'Sales Person') return (<select className="w-full min-w-[150px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)}><option value="">-- Select --</option>{SALES_PERSONS.map(s => <option key={s} value={s}>{s}</option>)}</select>);
+                                                                                if (key === 'Sales Person') {
+                                                                                    const selectedPerson = editValues[key] !== undefined ? editValues[key] : val;
+                                                                                    const salesPersonOptions = [...new Set([selectedPerson, ...SALES_PERSONS].filter(Boolean))];
+                                                                                    return (<select className="w-full min-w-[150px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={selectedPerson} onChange={e => handleEditValueChange(key, e.target.value)}><option value="">-- Select --</option>{salesPersonOptions.map(s => <option key={s} value={s}>{s}</option>)}</select>);
+                                                                                }
                                                                                 if (key === 'Recovered?') return (<select className="w-full min-w-[80px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)}><option value="No">No</option><option value="Yes">Yes</option></select>);
                                                                                 if (key === 'Party Name') return (
                                                                                     <div className="relative min-w-[180px]">
@@ -1922,7 +1952,7 @@
                                                                                     </div>
                                                                                 );
                                                                                 if (isAutoCalcField(key) || key === 'Cost Price' || key === 'Profit') return (<input className="w-full min-w-[90px] p-2 border-2 border-slate-200 rounded-lg font-bold text-[10px] bg-slate-50 text-slate-400 cursor-not-allowed" value={editValues[key] !== undefined ? editValues[key] : val} readOnly title="Auto-calculated" />);
-                                                                                return (<input className="w-full min-w-[80px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)} />);
+                                                                                return (<input type={['Qty', 'Rate', 'Discount', 'Freight', 'Qty (KG)', 'Price'].includes(key) ? 'number' : 'text'} step={['Qty', 'Rate', 'Discount', 'Freight', 'Qty (KG)', 'Price'].includes(key) ? 'any' : undefined} className="w-full min-w-[80px] p-2 border-2 border-amber-300 rounded-lg font-bold text-[10px] bg-white" value={editValues[key] !== undefined ? editValues[key] : val} onChange={e => handleEditValueChange(key, e.target.value)} />);
                                                                             })() : (<span className="text-slate-700">{val !== undefined && val !== null && val !== "" ? fmtCell(val) : "-"}</span>)}
                                                                         </td>
                                                                         );
@@ -1931,13 +1961,13 @@
                                                                         <div className="flex items-center justify-center gap-2">
                                                                             {isEditing ? (
                                                                                 <>
-                                                                                    <button onClick={saveEdit} disabled={btnLoad.saveEdit} className={`bg-emerald-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-emerald-700 transition disabled:opacity-60 ${btnLoad.saveEdit ? 'btn-spin' : ''}`}>{btnLoad.saveEdit ? '...' : 'Save ✓'}</button>
-                                                                                    <button onClick={() => setEditingRow(null)} className="bg-slate-400 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-slate-600 transition">Cancel</button>
+                                                                                    <button type="button" onClick={saveEdit} disabled={btnLoad.saveEdit} className={`bg-emerald-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-emerald-700 transition disabled:opacity-60 ${btnLoad.saveEdit ? 'btn-spin' : ''}`}>{btnLoad.saveEdit ? '...' : 'Save ✓'}</button>
+                                                                                    <button type="button" onClick={() => { setEditingRow(null); setEditValues({}); }} className="bg-slate-400 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-slate-600 transition">Cancel</button>
                                                                                 </>
                                                                             ) : (
                                                                                 <>
-                                                                                    <button onClick={() => startEditing(row)} className="bg-amber-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-amber-700 transition">Edit ✏️</button>
-                                                                                    <button onClick={() => deleteEntry(row)} className="bg-rose-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-rose-700 transition">Delete 🗑️</button>
+                                                                                    <button type="button" onClick={() => startEditing(row)} className="bg-amber-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-amber-700 transition">Edit ✏️</button>
+                                                                                    <button type="button" onClick={() => deleteEntry(row)} className="bg-rose-500 text-white px-3 py-1.5 rounded-full text-[9px] font-black hover:bg-rose-700 transition">Delete 🗑️</button>
                                                                                 </>
                                                                             )}
                                                                         </div>
