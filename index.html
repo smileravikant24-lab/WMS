@@ -233,8 +233,27 @@
                 label: date.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
             };
         };
+        const reportDateKey = value => {
+            if (!value) return 'undated';
+            const text = String(value).trim();
+            const isoDate = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (isoDate) {
+                const date = new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]));
+                if (date.getFullYear() === Number(isoDate[1]) && date.getMonth() === Number(isoDate[2]) - 1 && date.getDate() === Number(isoDate[3])) {
+                    return `${isoDate[1]}-${isoDate[2]}-${isoDate[3]}`;
+                }
+                return 'undated';
+            }
+            const dayFirst = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+            const date = dayFirst
+                ? new Date(Number(dayFirst[3]), Number(dayFirst[2]) - 1, Number(dayFirst[1]))
+                : new Date(text);
+            if (!Number.isFinite(date.getTime())) return 'undated';
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        };
         const prepareSalesReportRow = row => {
             const month = reportMonth(reportField(row, ['Date']));
+            const dateKey = reportDateKey(reportField(row, ['Date']));
             const warehouse = reportField(row, ['Warehouse']) || String(row._sheetName || '').replace(/^SalesLog_/i, '');
             const amount = reportNumber(reportField(row, ['Amount', 'Revenue']));
             const profit = reportNumber(reportField(row, ['Profit', 'Gross Profit', 'Total GP']));
@@ -242,6 +261,7 @@
             const buyPriceValue = reportField(row, ['Buy Price', 'Cost Price']);
             return {
                 ...row,
+                _reportDateKey: dateKey,
                 _reportMonthKey: month.key,
                 _reportMonth: month.label,
                 _reportWarehouse: String(warehouse || 'Unknown'),
@@ -331,6 +351,7 @@
             const [salesReportSource, setSalesReportSource] = useState('All');
             const [salesReportView, setSalesReportView] = useState('party');
             const [salesReportMonth, setSalesReportMonth] = useState('all');
+            const [salesReportDate, setSalesReportDate] = useState('');
             const [salesReportSearch, setSalesReportSearch] = useState('');
             const [salesReportSort, setSalesReportSort] = useState({ key: 'totalGP', direction: -1 });
             const [salesReportStatus, setSalesReportStatus] = useState('idle');
@@ -1220,17 +1241,20 @@
             const salesReportMonthRows = useMemo(() => salesReportSourceRows.filter(row =>
                 salesReportMonth === 'all' || row._reportMonthKey === salesReportMonth
             ), [salesReportSourceRows, salesReportMonth]);
-            const salesReportSuggestions = useMemo(() => [...new Set(salesReportMonthRows.map(row =>
+            const salesReportDateRows = useMemo(() => salesReportMonthRows.filter(row =>
+                !salesReportDate || row._reportDateKey === salesReportDate
+            ), [salesReportMonthRows, salesReportDate]);
+            const salesReportSuggestions = useMemo(() => [...new Set(salesReportDateRows.map(row =>
                 salesReportView === 'po' ? row._reportPO || 'PO not recorded' : row[salesReportDimension]
             ).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })),
-                [salesReportMonthRows, salesReportView, salesReportDimension]);
+                [salesReportDateRows, salesReportView, salesReportDimension]);
             const salesReportFilteredRows = useMemo(() => {
                 const query = salesReportSearch.trim().toLowerCase();
-                return salesReportMonthRows.filter(row => {
+                return salesReportDateRows.filter(row => {
                     const name = salesReportView === 'po' ? row._reportPO || 'PO not recorded' : row[salesReportDimension];
                     return !query || String(name).toLowerCase().includes(query);
                 });
-            }, [salesReportMonthRows, salesReportSearch, salesReportView, salesReportDimension]);
+            }, [salesReportDateRows, salesReportSearch, salesReportView, salesReportDimension]);
             const salesReportSummary = useMemo(() => {
                 const grouped = new Map();
                 salesReportFilteredRows.forEach(row => {
@@ -2025,8 +2049,8 @@
                                                 )}
                                             </div>
                                             <div className="md:col-span-3 flex gap-2">
-                                                <button onClick={fetchTallyReport} disabled={btnLoad.summary} className={`flex-1 p-3 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-black transition disabled:opacity-60 ${btnLoad.summary ? 'btn-spin' : ''}`}>{btnLoad.summary ? '...' : 'Summary'}</button>
-                                                <button onClick={fetchLedger} disabled={btnLoad.ledger} className={`flex-1 p-3 bg-orange-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-black transition disabled:opacity-60 ${btnLoad.ledger ? 'btn-spin' : ''}`}>{btnLoad.ledger ? '...' : 'Ledger'}</button>
+                                                <button onClick={() => fetchTallyReport()} disabled={btnLoad.summary} className={`flex-1 p-3 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-black transition disabled:opacity-60 ${btnLoad.summary ? 'btn-spin' : ''}`}>{btnLoad.summary ? '...' : 'Summary'}</button>
+                                                <button onClick={() => fetchLedger()} disabled={btnLoad.ledger} className={`flex-1 p-3 bg-orange-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-black transition disabled:opacity-60 ${btnLoad.ledger ? 'btn-spin' : ''}`}>{btnLoad.ledger ? '...' : 'Ledger'}</button>
                                             </div>
                                         </div>
                                     </div>
@@ -2239,7 +2263,7 @@
                                         </button>
                                     </div>
 
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
                                         <label className="space-y-1">
                                             <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Sales Source</span>
                                             <select value={salesReportSource} onChange={e => {
@@ -2256,10 +2280,21 @@
                                         </label>
                                         <label className="space-y-1">
                                             <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Month &amp; Year</span>
-                                            <select value={salesReportMonth} onChange={e => setSalesReportMonth(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm">
+                                            <select value={salesReportMonth} onChange={e => {
+                                                setSalesReportMonth(e.target.value);
+                                                setSalesReportDate('');
+                                            }} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm">
                                                 <option value="all">All Months</option>
                                                 {salesReportMonths.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
                                             </select>
+                                        </label>
+                                        <label className="space-y-1">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Date</span>
+                                            <input type="date" value={salesReportDate} onChange={e => {
+                                                setSalesReportDate(e.target.value);
+                                                setSalesReportSearch('');
+                                                if (e.target.value) setSalesReportMonth('all');
+                                            }} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm" />
                                         </label>
                                         <label className="space-y-1">
                                             <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
