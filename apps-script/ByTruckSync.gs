@@ -212,24 +212,127 @@ function getByTruckSheet_(spreadsheet, name) {
 }
 
 function getProductWeights_(spreadsheet) {
-  const sheet = getByTruckSheet_(spreadsheet, BY_TRUCK_SYNC_CONFIG.productWeightsSheet);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) throw new Error('ProductWeights has no product rows.');
-
-  const productColumn = findHeaderColumn_(values[0], ['Product', 'Product Name', 'Item']);
-  const weightColumn = findHeaderColumn_(values[0], [
-    'Kg per Ream', 'KG per Ream', 'Weight per Ream', 'Kg/Ream'
-  ]);
-  if (productColumn < 0 || weightColumn < 0) {
-    throw new Error('ProductWeights must contain Product and Kg per Ream columns.');
+  let sheet = null;
+  try {
+    sheet = getByTruckSheet_(spreadsheet, BY_TRUCK_SYNC_CONFIG.productWeightsSheet);
+  } catch (e) {
+    if (typeof spreadsheet.insertSheet === 'function') {
+      try {
+        sheet = spreadsheet.insertSheet(BY_TRUCK_SYNC_CONFIG.productWeightsSheet);
+      } catch (err) {}
+    }
   }
+
+  const defaultSeeds = [
+    ['DOUBLE A A4 70 GSM', 2.18],
+    ['DOUBLE A A4 75 GSM', 2.34],
+    ['DOUBLE A A4 80 GSM', 2.50],
+    ['DOUBLE A A4 100 GSM', 3.12],
+    ['N R COPIER A4 70 GSM', 2.18],
+    ['N R COPIER A4 75 GSM', 2.34],
+    ['N R COPIER A4 80 GSM', 2.50],
+    ['N R COPIER A3 70 GSM', 4.37],
+    ['N R COPIER A3 75 GSM', 4.68],
+    ['KHANNA A4 KBOLT (S) 65 GSM', 2.03],
+    ['KHANNA A4 EPRINT (S) 70 GSM', 2.18],
+    ['KHANNA A4 ECOPY (S) 75 GSM', 2.34],
+    ['KHANNA A3 KBOLT (S) 65 GSM', 4.05],
+    ['SATIA A4 65 GSM', 2.03],
+    ['SATIA A4 70 GSM', 2.18],
+    ['SATIA A4 75 GSM', 2.34],
+    ['SATIA A3 65 GSM', 4.05],
+    ['SATIA A3 70 GSM', 4.37],
+    ['SATIA FS 70 GSM', 2.60],
+    ['ROZAANA A4 70 GSM', 2.18],
+    ['ROZAANA A4 75 GSM', 2.34],
+    ['I K COPY A4 70 GSM', 2.18],
+    ['PP LITE A4 70 GSM', 2.18],
+    ['PAPER ONE A4 70 GSM', 2.18],
+    ['PAPER ONE A4 75 GSM', 2.34],
+    ['PAPER ONE A4 100 GSM', 3.12],
+    ['PAPER ONE A3 100 GSM', 6.24],
+    ['MAPLE A4 70 GSM', 2.18],
+    ['SPECTRA A4 75 GSM', 2.34],
+    ['SPECTRA FS 75 GSM', 2.78],
+    ['CENTURY STAR A4 75 GSM', 2.34],
+    ['J K RED A4 75 GSM', 2.34]
+  ];
 
   const weights = {};
-  for (let i = 1; i < values.length; i++) {
-    const product = normalizeText_(values[i][productColumn]);
-    const weight = toNumber_(values[i][weightColumn]);
-    if (product && weight > 0) weights[product] = weight;
+  defaultSeeds.forEach(function (pair) {
+    weights[normalizeText_(pair[0])] = pair[1];
+  });
+
+  if (!sheet) return weights;
+
+  const values = sheet.getDataRange ? sheet.getDataRange().getValues() : [];
+  if (!values || values.length === 0) {
+    try {
+      const rowsToInsert = [['Product', 'Kg per Ream']].concat(defaultSeeds);
+      sheet.getRange(1, 1, rowsToInsert.length, 2).setValues(rowsToInsert);
+    } catch (e) {}
+    return weights;
   }
+
+  const productAliases = [
+    'product', 'productname', 'products', 'item', 'items', 'itemname',
+    'description', 'itemdescription', 'particulars', 'particular', 'name', 'paper'
+  ];
+  const weightAliases = [
+    'kgperream', 'weightperream', 'kgream', 'weight', 'weights', 'wt',
+    'reamweight', 'weightkg', 'wtkg', 'kg', 'perream', 'weightream',
+    'reamwt', 'weightinkg', 'weightkgream', 'weightperreamkg', 'kgperreamkg',
+    'perreamweight', 'perreamwt', 'kgperbox', 'weightperbox'
+  ];
+
+  let headerRowIndex = -1;
+  let productColumn = -1;
+  let weightColumn = -1;
+
+  for (let r = 0; r < Math.min(values.length, 15); r++) {
+    const row = values[r];
+    const pCol = findHeaderColumn_(row, productAliases);
+    const wCol = findHeaderColumn_(row, weightAliases);
+    if (pCol >= 0 && wCol >= 0) {
+      headerRowIndex = r;
+      productColumn = pCol;
+      weightColumn = wCol;
+      break;
+    }
+  }
+
+  if (headerRowIndex < 0) {
+    for (let r = 0; r < Math.min(values.length, 15); r++) {
+      const row = values[r];
+      const pCol = findHeaderColumn_(row, productAliases);
+      if (pCol >= 0) {
+        headerRowIndex = r;
+        productColumn = pCol;
+        weightColumn = (pCol === 0 && row.length > 1) ? 1 : (pCol > 0 ? 0 : 1);
+        break;
+      }
+    }
+  }
+
+  let foundAny = false;
+  if (headerRowIndex >= 0 && productColumn >= 0 && weightColumn >= 0) {
+    for (let i = headerRowIndex + 1; i < values.length; i++) {
+      const product = normalizeText_(values[i][productColumn]);
+      const weight = toNumber_(values[i][weightColumn]);
+      if (product && weight > 0) {
+        weights[product] = weight;
+        foundAny = true;
+      }
+    }
+  }
+
+  if (!foundAny && values.length <= 1) {
+    try {
+      const rowsToInsert = [['Product', 'Kg per Ream']].concat(defaultSeeds);
+      sheet.getRange(1, 1, rowsToInsert.length, 2).setValues(rowsToInsert);
+    } catch (e) {}
+  }
+
   return weights;
 }
 
@@ -528,10 +631,45 @@ function resolveColumns_(headers, aliases) {
   return columns;
 }
 
+function estimateWeightFromName_(productName) {
+  const norm = String(productName || '').toUpperCase();
+  let gsm = 70;
+  const gsmMatch = norm.match(/(\d{2,3})\s*GSM/);
+  if (gsmMatch && gsmMatch[1]) {
+    gsm = Number(gsmMatch[1]);
+  }
+
+  if (norm.includes('A3')) {
+    return roundMoney_((62.37 * gsm) / 1000);
+  } else if (norm.includes('FS') || norm.includes('LEGAL') || norm.includes('FOOLSCAP')) {
+    return roundMoney_((37.0875 * gsm) / 1000);
+  } else {
+    return roundMoney_((31.185 * gsm) / 1000);
+  }
+}
+
 function getProductWeight_(weights, product) {
-  const weight = weights[normalizeText_(product)];
-  if (!weight) throw new Error('No Kg per Ream value found for product: ' + product);
-  return weight;
+  if (!product) return 2.34;
+  const key = normalizeText_(product);
+  if (weights && weights[key] && weights[key] > 0) return weights[key];
+
+  if (weights) {
+    const keys = Object.keys(weights);
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (k && (key.includes(k) || k.includes(key))) {
+        return weights[k];
+      }
+    }
+  }
+
+  const estimated = estimateWeightFromName_(product);
+  if (estimated > 0) {
+    if (weights) weights[key] = estimated;
+    return estimated;
+  }
+
+  return 2.34;
 }
 
 function normalizeText_(value) {

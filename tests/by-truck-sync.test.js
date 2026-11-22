@@ -445,3 +445,18 @@ test('syncs across two distinct external spreadsheets for Purchase and Sales wit
   assert.equal(sSheet.data[1][sHeaders.indexOf('Cost Price')], 64);
   assert.equal(sSheet.data[1][sHeaders.indexOf('Profit')], 48);
 });
+
+test('handles unformatted or empty ProductWeights gracefully without throwing header errors', () => {
+  const { context, source, wms } = createHarness();
+  // Clear ProductWeights to simulate unformatted or newly created blank sheet
+  const pw = wms.getSheetByName('ProductWeights');
+  pw.data = [['Some Title Banner', ''], ['', '']];
+
+  appendSource(source.getSheetByName('Orders (Readable)'), sourcePurchase('PO-PW-TEST', 2, 100, 0, 0));
+  assert.doesNotThrow(() => {
+    context.syncByTruckData();
+  });
+
+  const pSheet = wms.getSheetByName('PurchaseLog_By Truck');
+  assert.equal(pSheet.getLastRow(), 2);
+});
