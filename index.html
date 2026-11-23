@@ -4,6 +4,66 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Satija Paper WMS v7.1</title>
+
+    <!-- Security & Anti-DevTools Protection -->
+    <script>
+        (function() {
+            // 1. Disable Right-Click Context Menu
+            document.addEventListener('contextmenu', function(e) {
+                e.preventDefault();
+                return false;
+            }, { capture: true });
+
+            // 2. Block Inspect, DevTools & View-Source Keyboard Shortcuts
+            document.addEventListener('keydown', function(e) {
+                // F12 key
+                if (e.key === 'F12' || e.keyCode === 123) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+                // Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C (Inspect/Console/Element)
+                // Ctrl+Shift+K, Ctrl+Shift+E (Firefox developer tools)
+                if ((e.ctrlKey || e.metaKey) && e.shiftKey && 
+                    ['I', 'i', 'J', 'j', 'C', 'c', 'K', 'k', 'E', 'e'].includes(e.key)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+                // Ctrl+U (View Source), Ctrl+S (Save Page), Ctrl+P (Print Page)
+                if ((e.ctrlKey || e.metaKey) && ['u', 'U', 's', 'S', 'p', 'P'].includes(e.key)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+            }, { capture: true });
+
+            // 3. Disable Console Output to protect internal data and APIs
+            const noop = function() {};
+            ['log', 'debug', 'info', 'warn', 'error', 'table', 'dir', 'clear'].forEach(function(method) {
+                try {
+                    window.console[method] = noop;
+                } catch(e) {}
+            });
+
+            // 4. Anti-Debugger Loop (Freezes DevTools if opened via browser menu)
+            setInterval(function() {
+                (function() {
+                    return false;
+                }['constructor']('debugger')['call']());
+            }, 300);
+
+            // 5. DevTools Detection via Execution Timing Trap
+            setInterval(function() {
+                const start = performance.now();
+                debugger;
+                const end = performance.now();
+                if (end - start > 100) {
+                    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;background:#0f172a;color:#ef4444;font-family:sans-serif;font-size:20px;font-weight:700;">Developer Mode is disabled for security reasons.</div>';
+                }
+            }, 1000);
+        })();
+    </script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com/3.4.1"></script>
     <!-- React & ReactDOM -->
