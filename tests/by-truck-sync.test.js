@@ -460,3 +460,31 @@ test('handles unformatted or empty ProductWeights gracefully without throwing he
   const pSheet = wms.getSheetByName('PurchaseLog_By Truck');
   assert.equal(pSheet.getLastRow(), 2);
 });
+
+test('populates all columns including Mill, Warehouse, Unit Type, Bill Type, and Recovered', () => {
+  const { context, source, wms } = createHarness();
+  const purchaseSource = source.getSheetByName('Orders (Readable)');
+  const salesSource = source.getSheetByName('Workflow');
+
+  appendSource(purchaseSource, sourcePurchase('PO-FULL-1', 10, 110, 50, 20, 'yes', '20/11/2026'));
+  appendSource(salesSource, sourceSale('PO-FULL-1', 'BILL-100', 5, 20, '21/11/2026'));
+
+  context.syncByTruckData();
+
+  const pSheet = wms.getSheetByName('PurchaseLog_By Truck');
+  const sSheet = wms.getSheetByName('SalesLog_By Truck');
+  const pHeaders = pSheet.data[0];
+  const sHeaders = sSheet.data[0];
+
+  // Verify Purchase row has no blank core fields
+  assert.equal(pSheet.data[1][pHeaders.indexOf('Warehouse')], 'By Truck');
+  assert.equal(pSheet.data[1][pHeaders.indexOf('Unit Type')], 'Ream');
+  assert.equal(pSheet.data[1][pHeaders.indexOf('Bill Type')], 'GST');
+  assert.ok(pSheet.data[1][pHeaders.indexOf('Mill')]);
+
+  // Verify Sales row has no blank core fields
+  assert.equal(sSheet.data[1][sHeaders.indexOf('Warehouse')], 'By Truck');
+  assert.equal(sSheet.data[1][sHeaders.indexOf('Bill Type')], 'GST');
+  assert.equal(sSheet.data[1][sHeaders.indexOf('Recovered?')], 'No');
+  assert.ok(sSheet.data[1][sHeaders.indexOf('Mills')]);
+});

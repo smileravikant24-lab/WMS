@@ -1183,14 +1183,24 @@
             const modifyResultColumns = useMemo(() => {
                 if (modifyResults.length === 0) return [];
                 const seen = new Set(); const ordered = [];
-                modifyResults.forEach(row => { Object.keys(row).forEach(k => { if (k.startsWith('_')) return; if (!seen.has(k)) { seen.add(k); ordered.push(k); } }); });
+                modifyResults.forEach(row => {
+                    Object.keys(row).forEach(k => {
+                        if (k.startsWith('_') || k === 'Bill Type' || k === 'BillType') return;
+                        if (!seen.has(k)) { seen.add(k); ordered.push(k); }
+                    });
+                });
                 return ordered;
             }, [modifyResults]);
 
             const logModalColumns = useMemo(() => {
                 if (!logModal.data || logModal.data.length === 0) return [];
                 const seen = new Set(); const ordered = [];
-                logModal.data.forEach(row => { Object.keys(row).forEach(k => { if (k.startsWith('_')) return; if (!seen.has(k)) { seen.add(k); ordered.push(k); } }); });
+                logModal.data.forEach(row => {
+                    Object.keys(row).forEach(k => {
+                        if (k.startsWith('_') || k === 'Bill Type' || k === 'BillType') return;
+                        if (!seen.has(k)) { seen.add(k); ordered.push(k); }
+                    });
+                });
                 return ordered;
             }, [logModal.data]);
 

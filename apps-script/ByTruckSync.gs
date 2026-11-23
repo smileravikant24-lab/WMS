@@ -55,14 +55,30 @@ const BY_TRUCK_SYNC_CONFIG = {
 };
 
 function syncByTruckData() {
-  syncByTruckPurchases_();
-  syncByTruckSales_();
-  try {
-    if (typeof rebuildByTruckOnly === 'function') {
-      rebuildByTruckOnly();
+  let lock = null;
+  if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(30000)) {
+      Logger.log('[syncByTruckData] Busy or locked, skipping tick.');
+      return;
     }
-  } catch (e) {
-    Logger.log('rebuildByTruckOnly after sync error: ' + e.message);
+  }
+  try {
+    syncByTruckPurchases_();
+    syncByTruckSales_();
+    try {
+      if (typeof rebuildByTruckOnly === 'function') {
+        rebuildByTruckOnly();
+      }
+    } catch (e) {
+      Logger.log('rebuildByTruckOnly after sync error: ' + e.message);
+    }
+  } catch (err) {
+    Logger.log('[syncByTruckData Error]: ' + err.message);
+  } finally {
+    if (lock) {
+      try { lock.releaseLock(); } catch (e) {}
+    }
   }
 }
 
@@ -96,8 +112,9 @@ function syncByTruckPurchases_() {
   const source = getByTruckSheet_(books.purchaseSource || books.source, BY_TRUCK_SYNC_CONFIG.purchaseSourceSheet);
   const target = getByTruckSheet_(books.wms, BY_TRUCK_SYNC_CONFIG.purchaseTargetSheet);
   const weights = getProductWeights_(books.wms);
+  const millMap = getProductMasterMills_(books.wms);
   const sourceRows = source.getDataRange().getValues();
-  const purchases = buildByTruckPurchases_(sourceRows, weights);
+  const purchases = buildByTruckPurchases_(sourceRows, weights, millMap);
   upsertByTruckRows_(target, purchases, 'purchase');
 }
 
@@ -107,9 +124,10 @@ function syncByTruckSales_() {
   const purchaseSheet = getByTruckSheet_(books.wms, BY_TRUCK_SYNC_CONFIG.purchaseTargetSheet);
   const target = getByTruckSheet_(books.wms, BY_TRUCK_SYNC_CONFIG.salesTargetSheet);
   const weights = getProductWeights_(books.wms);
+  const millMap = getProductMasterMills_(books.wms);
   const costs = getByTruckPurchaseCosts_(purchaseSheet, weights);
   const sourceRows = source.getDataRange().getValues();
-  const sales = buildByTruckSales_(sourceRows, weights, costs);
+  const sales = buildByTruckSales_(sourceRows, weights, costs, millMap);
   upsertByTruckRows_(target, sales, 'sales');
 }
 
@@ -336,7 +354,48 @@ function getProductWeights_(spreadsheet) {
   return weights;
 }
 
-function buildByTruckPurchases_(sourceRows, weights) {
+function getProductMasterMills_(spreadsheet) {
+  let sheet = null;
+  if (!spreadsheet) return {};
+  try {
+    sheet = spreadsheet.getSheetByName('ProductMaster');
+  } catch (e) {}
+  const millMap = {};
+  if (!sheet) return millMap;
+  const values = sheet.getDataRange ? sheet.getDataRange().getValues() : [];
+  for (let i = 1; i < values.length; i++) {
+    const mill = cleanText_(values[i][1]);
+    const prod = normalizeText_(values[i][2]);
+    if (prod && mill) {
+      millMap[prod] = mill;
+    }
+  }
+  return millMap;
+}
+
+function getMillForProduct_(product, millMap) {
+  if (!product) return '';
+  const norm = normalizeText_(product);
+  if (millMap && millMap[norm]) return millMap[norm];
+
+  // Fallback inferences if not in ProductMaster:
+  if (/^DOUBLE\s*A/i.test(product)) return 'Double A';
+  if (/^N\s*R\s*COPIER/i.test(product) || /^NR\s*COPIER/i.test(product) || /^NR\b/i.test(product)) return 'NR';
+  if (/^KHANNA/i.test(product)) return 'Khanna';
+  if (/^SATIA/i.test(product)) return 'Satia';
+  if (/^BILT/i.test(product) || /^BILL\s*MATRIX/i.test(product)) return 'BILT';
+  if (/^REFLECTION/i.test(product) || /^ANDHRA/i.test(product)) return 'Andhra';
+  if (/^SPECTRA/i.test(product)) return 'Spectra';
+  if (/^PAPER\s*ONE/i.test(product)) return 'Paper One';
+  if (/^ROZAANA/i.test(product) || /^ROZANA/i.test(product)) return 'Rozaana';
+  if (/^CENTURY/i.test(product)) return 'Century';
+  if (/^J\s*K/i.test(product) || /^JK/i.test(product)) return 'JK';
+
+  const firstWord = product.trim().split(/\s+/)[0];
+  return firstWord || '';
+}
+
+function buildByTruckPurchases_(sourceRows, weights, millMap) {
   const start = BY_TRUCK_SYNC_CONFIG.purchaseStartRow - 1;
   const columns = BY_TRUCK_SYNC_CONFIG.purchaseSourceColumns;
   const rows = [];
@@ -387,22 +446,29 @@ function buildByTruckPurchases_(sourceRows, weights) {
     const pricePerReam = Number((ratePerKg * weight).toFixed(2));
     const amount = Number((qtyReam * pricePerReam).toFixed(2));
     const netBuyPerReam = (amount + allocatedInsurance + allocatedFreight) / qtyReam;
+    const mill = getMillForProduct_(entry.product, millMap);
     return {
       sourceKey: 'purchase:' + entry.sourceRow,
       naturalKey: [entry.po, entry.product],
       values: {
         date: entry.invoiceDate,
-        po: entry.po,
+        mill: mill,
         product: entry.product,
+        warehouse: 'By Truck',
+        unitType: 'Ream',
         qtyReam: qtyReam,
         pricePerReam: pricePerReam,
         amount: amount,
-        qtyKg: entry.qtyKg,
-        ratePerKg: ratePerKg,
+        billType: 'GST',
+        insurance: allocatedInsurance,
+        freight: allocatedFreight,
+        loading: 0,
+        extrasClaim: 0,
         netBuyPerReam: netBuyPerReam,
         netBuyPerKg: netBuyPerReam / weight,
-        insurance: allocatedInsurance,
-        freight: allocatedFreight
+        po: entry.po,
+        qtyKg: entry.qtyKg,
+        ratePerKg: ratePerKg
       }
     };
   });
@@ -457,7 +523,7 @@ function getByTruckPurchaseCosts_(purchaseSheet, weights) {
   return costs;
 }
 
-function buildByTruckSales_(sourceRows, weights, costs) {
+function buildByTruckSales_(sourceRows, weights, costs, millMap) {
   const start = BY_TRUCK_SYNC_CONFIG.salesStartRow - 1;
   const columns = BY_TRUCK_SYNC_CONFIG.salesSourceColumns;
   const sales = [];
@@ -474,30 +540,39 @@ function buildByTruckSales_(sourceRows, weights, costs) {
     const ratePerKg = toNumber_(row[columns.ratePerKg]);
     const ratePerReam = ratePerKg * weight;
     const amount = roundMoney_(qtyReam * ratePerReam);
-    const costPerKg = costs[normalizeKey_([po, product])];
-    if (costPerKg === undefined) {
-      throw new Error('No By Truck purchase cost found for PO ' + po + ', product: ' + product);
+    let costPerKg = costs[normalizeKey_([po, product])];
+    if (costPerKg === undefined || isNaN(costPerKg)) {
+      // Fallback: If no purchase cost found for this PO yet, do not throw fatal error
+      costPerKg = ratePerKg > 0 ? ratePerKg : 0;
     }
     const costPerReam = costPerKg * weight;
     const costAmount = roundMoney_(qtyReam * costPerReam);
+    const mill = getMillForProduct_(product, millMap);
 
     sales.push({
       sourceKey: 'sales:' + (i + 1),
       naturalKey: [po, billNo, product],
       values: {
         date: salesDate,
-        po: po,
-        party: row[columns.party],
-        salesPerson: row[columns.salesPerson],
+        salesPerson: cleanText_(row[columns.salesPerson]),
+        padNo: '',
         billNo: billNo,
+        party: cleanText_(row[columns.party]),
+        mill: mill,
         product: product,
+        warehouse: 'By Truck',
+        billType: 'GST',
         qtyReam: qtyReam,
         ratePerKg: ratePerKg,
         ratePerReam: ratePerReam,
+        discount: 0,
         amount: amount,
+        freight: 0,
+        recovered: 'No',
         costPerReam: costPerReam,
         costAmount: costAmount,
-        profit: roundMoney_(amount - costAmount)
+        profit: roundMoney_(amount - costAmount),
+        po: po
       }
     });
   }
@@ -518,29 +593,42 @@ function upsertByTruckRows_(sheet, records, kind) {
 
   const fieldAliases = kind === 'purchase' ? {
     date: ['Date', 'Invoice Date', 'Bill Date'],
-    po: ['PO No', 'PO Number', 'PO'],
+    mill: ['Mill', 'Mills', 'Category', 'Brand'],
     product: ['Product', 'Product Name', 'Item'],
+    warehouse: ['Warehouse', 'Godown'],
+    unitType: ['Unit Type', 'Unit', 'UOM'],
     qtyReam: ['Qty', 'Quantity', 'Qty (Ream)', 'Qty Ream'],
     pricePerReam: ['Price per Ream', 'Rate per Ream', 'Price', 'Rate'],
     amount: ['Amount', 'Purchase Amount', 'Total Amount'],
+    billType: ['Bill Type', 'BillType', 'Type'],
+    insurance: ['Insurance'],
+    freight: ['Cartage', 'Freight'],
+    loading: ['Loading'],
+    extrasClaim: ['Extras Claimed', 'Extras Claim', 'Extras'],
     netBuyPerReam: ['Net Buy Ream', 'Net Buy/Ream', 'Net Buy per Ream'],
     netBuyPerKg: ['Net Buy Kg', 'Net Buy/Kg', 'Net Buy per Kg', 'Net Rate per Kg'],
-    insurance: ['Insurance'],
-    freight: ['Cartage', 'Freight']
+    po: ['PO No', 'PO Number', 'PO']
   } : {
     date: ['Date', 'Invoice Date', 'Bill Date'],
-    po: ['PO No', 'PO Number', 'PO'],
-    party: ['Party', 'Party Name', 'Customer'],
     salesPerson: ['Sales Person', 'Salesperson'],
+    padNo: ['Pad No.', 'Pad No', 'Pad'],
     billNo: ['Bill No', 'Bill Number', 'Invoice No', 'Invoice Number'],
+    party: ['Party', 'Party Name', 'Customer'],
+    mill: ['Mills', 'Mill', 'Category', 'Brand'],
     product: ['Product', 'Product Name', 'Item'],
+    warehouse: ['Warehouse', 'Godown'],
+    billType: ['Bill Type', 'BillType', 'Type'],
     qtyReam: ['Qty', 'Quantity', 'Qty (Ream)', 'Qty Ream'],
+    ratePerReam: ['Rate', 'Rate per Ream', 'Price per Ream', 'Price'],
     ratePerKg: ['Rate per Kg', 'Rate/Kg', 'Price per Kg', 'Price/Kg'],
-    ratePerReam: ['Rate per Ream', 'Price per Ream', 'Rate', 'Price'],
+    discount: ['Discount', 'Disc.'],
     amount: ['Amount', 'Sales Amount', 'Total Amount'],
+    freight: ['Freight', 'Cartage'],
+    recovered: ['Recovered?', 'Recovered', 'Freight Recovered'],
     costPerReam: ['Cost Price', 'Cost per Ream', 'Purchase Price'],
     costAmount: ['Cost Amount', 'Total Cost'],
-    profit: ['Profit', 'Gross Profit', 'GP']
+    profit: ['Profit', 'Gross Profit', 'GP'],
+    po: ['PO No', 'PO Number', 'PO']
   };
   const columns = {};
   Object.keys(fieldAliases).forEach(function (field) {
