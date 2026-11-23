@@ -818,23 +818,23 @@
             }, [selectedWH, dashData.items, dashSearch]);
 
             const itemStats = useMemo(() => {
-                if (!formData.product || !formData.warehouse) return { qty: 0, avgGST: 0, avgNonGST: 0 };
+                if (!formData.product || !formData.warehouse) return { qty: 0, avgGST: 0, avgNetRate: 0 };
                 // 1) Match warehouse + product + mill
                 const match1 = dashData.items.find(i => 
                     ciEquals(i.warehouse, formData.warehouse) &&
                     ciEquals(i.product, formData.product) &&
                     millMatches(i.mill, formData.mill)
                 );
-                if (match1) return match1;
+                if (match1) return { ...match1, avgNetRate: match1.avgNetRate || 0 };
 
                 // 2) Match warehouse + product (in case mill name in MasterStock differs slightly e.g. Satia vs Satia Industries)
                 const match2 = dashData.items.find(i => 
                     ciEquals(i.warehouse, formData.warehouse) &&
                     ciEquals(i.product, formData.product)
                 );
-                if (match2) return match2;
+                if (match2) return { ...match2, avgNetRate: match2.avgNetRate || 0 };
 
-                return { qty: 0, avgGST: 0, avgNonGST: 0 };
+                return { qty: 0, avgGST: 0, avgNetRate: 0 };
             }, [formData.product, formData.warehouse, formData.mill, dashData.items]);
 
             // Track stock in other warehouses for this product
@@ -846,7 +846,7 @@
             }, [formData.product, formData.warehouse, dashData.items]);
 
             // Price Freeze indicator: stock 0 hai lekin last rate saved hai (frozen)
-            const isFrozenRate = useMemo(() => (Number(itemStats.qty) || 0) === 0 && ((Number(itemStats.avgGST) || 0) > 0 || (Number(itemStats.avgNonGST) || 0) > 0), [itemStats]);
+            const isFrozenRate = useMemo(() => (Number(itemStats.qty) || 0) === 0 && ((Number(itemStats.avgGST) || 0) > 0 || (Number(itemStats.avgNetRate) || 0) > 0), [itemStats]);
 
             const currentTotal = useMemo(() => {
                 const subTotal = (Number(formData.qty) || 0) * (Number(formData.price) || 0);
@@ -858,7 +858,7 @@
             // Auto-fill price for Stock Out
             useEffect(() => {
                 if (!formData.product || !formData.warehouse || activeTab !== 'out') return;
-                if (isNetMode) { const avgNonGST = Number(itemStats.avgNonGST) || 0; setFormData(prev => ({ ...prev, price: avgNonGST > 0 ? avgNonGST.toString() : '' })); }
+                if (isNetMode) { const avgNetRate = Number(itemStats.avgNetRate) || 0; setFormData(prev => ({ ...prev, price: avgNetRate > 0 ? avgNetRate.toString() : '' })); }
                 else { const avgGST = Number(itemStats.avgGST) || 0; setFormData(prev => ({ ...prev, price: avgGST > 0 ? avgGST.toString() : '' })); }
             }, [formData.product, formData.billType, formData.warehouse, activeTab]);
 
@@ -872,7 +872,7 @@
                             ...prev,
                             items: prev.items.map(i => {
                                 if (ciEquals(i.warehouse, warehouse) && ciEquals(i.product, product) && millMatches(i.mill, mill)) {
-                                    return { ...i, avgNonGST: netRate };
+                                    return { ...i, avgNetRate: netRate };
                                 }
                                 return i;
                             })
@@ -911,7 +911,7 @@
                 // NET mode (Stock Out NON-GST) - Check Net Cost Price
                 if (isNetMode && activeTab === 'out') {
                     const salePrice = enteredPrice;
-                    const existingCostPrice = Number(itemStats.avgNonGST) || 0;
+                    const existingCostPrice = Number(itemStats.avgNetRate) || 0;
                     if (existingCostPrice === 0) {
                         Swal.fire({
                             title: '💰 Net Cost Price Missing in Master!',
@@ -996,7 +996,7 @@
                     if (action === 'STOCK_OUT' && itm.billType === 'NON-GST') {
                         const directCP = Number(itm.costPrice) || 0;
                         const masterProduct = dashData.items.find(i => ciEquals(i.warehouse, formData.warehouse) && ciEquals(i.product, itm.product) && millMatches(i.mill, itm.mill));
-                        const masterCP = masterProduct ? (Number(masterProduct.avgNonGST) || 0) : 0;
+                        const masterCP = masterProduct ? (Number(masterProduct.avgNetRate) || 0) : 0;
                         if (directCP <= 0 && masterCP <= 0) {
                             return Swal.fire({
                                 icon: 'error',
@@ -1509,7 +1509,7 @@
                                                 <tbody className="divide-y divide-slate-100">
                                                     {tableData.length > 0 ? tableData.map((item, i) => {
                                                         const rowQty = Number(item.qty) || 0;
-                                                        const rowRate = Number(item.avgGST) > 0 ? Number(item.avgGST) : (Number(item.avgNonGST) > 0 ? Number(item.avgNonGST) : 0);
+                                                        const rowRate = Number(item.avgGST) > 0 ? Number(item.avgGST) : (Number(item.avgNetRate) > 0 ? Number(item.avgNetRate) : 0);
                                                         const isFrozen = rowQty === 0 && rowRate > 0;
                                                         return (
                                                             <tr key={i} className="hover:bg-blue-50/40 transition">
@@ -1673,7 +1673,7 @@
                                                                     ) : (
                                                                         <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4">
                                                                             <p className="text-[11px] font-black text-amber-700 uppercase tracking-widest">{isFrozenRate ? 'Last Net Rate (Stock 0)' : 'Net Rate'}</p>
-                                                                            <p className="text-xl font-black text-amber-700">{Number(itemStats.avgNonGST) > 0 ? '₹' + n2(itemStats.avgNonGST, true) : 'N/A'} {isFrozenRate && Number(itemStats.avgNonGST) > 0 && <span className="frozen-badge">LAST</span>}</p>
+                                                                            <p className="text-xl font-black text-amber-700">{Number(itemStats.avgNetRate) > 0 ? '₹' + n2(itemStats.avgNetRate, true) : 'N/A'} {isFrozenRate && Number(itemStats.avgNetRate) > 0 && <span className="frozen-badge">LAST</span>}</p>
                                                                         </div>
                                                                     )
                                                                 )}

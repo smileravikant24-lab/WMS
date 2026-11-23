@@ -1263,35 +1263,35 @@ function _processAndWriteToMaster(master, mill, product, warehouse, events, last
 
   let finalQty = Math.max(0, Number(runningQty.toFixed(2)));
   let avgGST = 0;
-  let avgNonGST = 0;
+  let avgNetRate = 0;
 
   // Check existing row in MasterStock to preserve previously saved rates if events don't have them
   const masterRow = findProductRowWithWarehouse(master, mill, product, warehouse);
   let existingAvgGST = 0;
-  let existingAvgNonGST = 0;
+  let existingAvgNetRate = 0;
   if (masterRow > 0) {
     const existingVals = master.getRange(masterRow, 5, 1, 2).getValues()[0];
     existingAvgGST = Number(existingVals[0]) || 0;
-    existingAvgNonGST = Number(existingVals[1]) || 0;
+    existingAvgNetRate = Number(existingVals[1]) || 0;
   }
 
   if (finalQty > 0.001) {
     avgGST = gstQty > 0 ? Number((gstSum / gstQty).toFixed(2)) : (rateSetGST || lastGstRate || existingAvgGST || 0);
-    avgNonGST = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (rateSetNonGST || lastNonGstRate || existingAvgNonGST || 0);
+    avgNetRate = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (rateSetNonGST || lastNonGstRate || existingAvgNetRate || 0);
     avgGST = Number(avgGST.toFixed(2));
-    avgNonGST = Number(avgNonGST.toFixed(2));
+    avgNetRate = Number(avgNetRate.toFixed(2));
   } else {
-    // ── ZERO STOCK PRICE FREEZE (GST & Non-GST) ──
+    // ── ZERO STOCK PRICE FREEZE (GST & Net Rate) ──
     // When Qty becomes 0, DO NOT wipe prices to 0!
     // Freeze the last known purchase/active rate so downstream sheets never fetch 0.
     finalQty = 0;
     avgGST = gstQty > 0 ? Number((gstSum / gstQty).toFixed(2)) : (lastGstRate || rateSetGST || existingAvgGST || 0);
-    avgNonGST = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (lastNonGstRate || rateSetNonGST || existingAvgNonGST || 0);
+    avgNetRate = nonGstQty > 0 ? Number((nonGstSum / nonGstQty).toFixed(2)) : (lastNonGstRate || rateSetNonGST || existingAvgNetRate || 0);
     avgGST = Number(avgGST.toFixed(2));
-    avgNonGST = Number(avgNonGST.toFixed(2));
+    avgNetRate = Number(avgNetRate.toFixed(2));
   }
 
-  const effectiveAvg = avgGST > 0 ? avgGST : avgNonGST;
+  const effectiveAvg = avgGST > 0 ? avgGST : avgNetRate;
   // Total Value is always 0.00 when finalQty is 0
   const totalVal = Number((finalQty * effectiveAvg).toFixed(2));
 
@@ -1299,11 +1299,11 @@ function _processAndWriteToMaster(master, mill, product, warehouse, events, last
     master.getRange(masterRow, 4, 1, 4).setValues([[
       finalQty,
       avgGST,
-      avgNonGST,
+      avgNetRate,
       totalVal
     ]]);
   } else {
-    master.appendRow([mill, product, warehouse, finalQty, avgGST, avgNonGST, totalVal, lastKnownUnit || 'Ream']);
+    master.appendRow([mill, product, warehouse, finalQty, avgGST, avgNetRate, totalVal, lastKnownUnit || 'Ream']);
   }
 }
 
@@ -1592,7 +1592,7 @@ function processData(payload) {
           }
         }
 
-        validatedItems.push({ item, row, currentQty, avgGST: Number(vals[1]) || 0, avgNonGST: Number(vals[2]) || 0, itemQty });
+        validatedItems.push({ item, row, currentQty, avgGST: Number(vals[1]) || 0, avgNetRate: Number(vals[2]) || 0, itemQty });
       });
 
       function markExtrasClaimed(warehouse, purchaseRow) {
@@ -1606,7 +1606,7 @@ function processData(payload) {
       }
 
       let freightRunning = 0;
-      validatedItems.forEach(({ item, row, currentQty, avgGST, avgNonGST, itemQty }, idx) => {
+      validatedItems.forEach(({ item, row, currentQty, avgGST, avgNetRate, itemQty }, idx) => {
         const billTypeRaw = String(item.billType || '').toUpperCase().replace(/[-\s]/g, '');
         const batches = getFifoBatches(item.mill, item.product, data.warehouse, item.billType);
 
@@ -1645,15 +1645,15 @@ function processData(payload) {
                 const typeIsNon = String(pd[i][pTi]||'').toUpperCase().replace(/[-\s]/g,'').includes('NON');
                 if (typeIsNon === billTypeRaw.includes('NON')) { sum += (Number(pd[i][pRi])||0) * q; qtyTotal += q; }
               }
-              fallbackCP = qtyTotal > 0 ? sum / qtyTotal : (billTypeRaw.includes('NON') ? (avgNonGST || Number(item.costPrice) || 0) : avgGST);
+              fallbackCP = qtyTotal > 0 ? sum / qtyTotal : (billTypeRaw.includes('NON') ? (avgNetRate || Number(item.costPrice) || 0) : avgGST);
             } else {
-              fallbackCP = billTypeRaw.includes('NON') ? (avgNonGST || Number(item.costPrice) || 0) : avgGST;
+              fallbackCP = billTypeRaw.includes('NON') ? (avgNetRate || Number(item.costPrice) || 0) : avgGST;
             }
           }
           splitRows.push({ qty: remainingSaleQty, costPrice: fallbackCP, extras: 0 });
         }
         if (splitRows.length === 0) {
-          const fallback = billTypeRaw.includes('NON') ? (avgNonGST || Number(item.costPrice) || 0) : avgGST;
+          const fallback = billTypeRaw.includes('NON') ? (avgNetRate || Number(item.costPrice) || 0) : avgGST;
           splitRows.push({ qty: itemQty, costPrice: fallback, extras: 0 });
         }
 
@@ -1664,14 +1664,14 @@ function processData(payload) {
         }
 
         let newQty = currentQty - itemQty;
-        let finalAvgGST = avgGST, finalAvgNonGST = avgNonGST;
+        let finalAvgGST = avgGST, finalAvgNetRate = avgNetRate;
         if (newQty <= 0.001) {
           newQty = 0;
-          // Freeze last known rates (GST & Non-GST) when stock drops to 0!
-          // finalAvgGST and finalAvgNonGST stay intact as avgGST & avgNonGST
+          // Freeze last known rates (GST & Net Rate) when stock drops to 0!
+          // finalAvgGST and finalAvgNetRate stay intact as avgGST & avgNetRate
         }
-        let finalEffectiveAvg = finalAvgGST > 0 ? finalAvgGST : finalAvgNonGST;
-        master.getRange(row, 4, 1, 4).setValues([[ Math.max(0, newQty), Number(finalAvgGST.toFixed(2)), Number(finalAvgNonGST.toFixed(2)), Number((Math.max(0, newQty) * finalEffectiveAvg).toFixed(2)) ]]);
+        let finalEffectiveAvg = finalAvgGST > 0 ? finalAvgGST : finalAvgNetRate;
+        master.getRange(row, 4, 1, 4).setValues([[ Math.max(0, newQty), Number(finalAvgGST.toFixed(2)), Number(finalAvgNetRate.toFixed(2)), Number((Math.max(0, newQty) * finalEffectiveAvg).toFixed(2)) ]]);
 
         splitRows.forEach((split, splitIdx) => {
           const splitDiscount = splitIdx === 0 ? (Number(item.discount) || 0) : 0;
@@ -2080,8 +2080,8 @@ function getDashboardData() {
     grandTotal += Number(data[i][6]) || 0;
     const qty = Number(data[i][3]) || 0;
     const avgGST = qty <= 0.001 ? 0 : (Number(data[i][4]) || 0);
-    const avgNonGST = qty <= 0.001 ? 0 : (Number(data[i][5]) || 0);
-    items.push({ mill: data[i][0], product: data[i][1], warehouse: data[i][2], qty: qty, avgGST: avgGST, avgNonGST: avgNonGST, totalVal: data[i][6], unit: data[i][7] });
+    const avgNetRate = qty <= 0.001 ? 0 : (Number(data[i][5]) || 0);
+    items.push({ mill: data[i][0], product: data[i][1], warehouse: data[i][2], qty: qty, avgGST: avgGST, avgNetRate: avgNetRate, totalVal: data[i][6], unit: data[i][7] });
   }
   return JSON.stringify({ items, totalValue: grandTotal });
 }
