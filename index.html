@@ -5,6 +5,65 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Satija Paper WMS v7.1</title>
 
+    <!-- ── AUTH VERIFICATION GATE (Blocks Direct / Unauthorized Access) ── -->
+    <script>
+        (function() {
+            // Local development bypass
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                return;
+            }
+
+            const TICKET_MAX_AGE_MS = 60 * 1000; // 60 seconds handoff window
+            const DASHBOARD_URL = "https://satijapaper.com/dashboard/";
+
+            // 1. If this tab was already verified in this session (e.g. reload / work), allow it
+            if (sessionStorage.getItem('sp_wms_authorized') === 'true') {
+                return;
+            }
+
+            let authorized = false;
+
+            // 2. Check localStorage handoff ticket (set when clicking from Dashboard)
+            try {
+                const rawTicket = localStorage.getItem('sp_wms_access_ticket');
+                if (rawTicket) {
+                    const ticket = JSON.parse(rawTicket);
+                    if (ticket && ticket.t && (Date.now() - ticket.t < TICKET_MAX_AGE_MS)) {
+                        authorized = true;
+                        localStorage.removeItem('sp_wms_access_ticket'); // one-time use
+                    }
+                }
+            } catch(e) {}
+
+            // 3. Fallback: Check auth_ticket in URL query params
+            if (!authorized) {
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const authTicket = params.get('auth_ticket');
+                    if (authTicket) {
+                        const parts = atob(decodeURIComponent(authTicket)).split(':');
+                        const ticketTime = parseInt(parts[0], 10);
+                        if (ticketTime && (Date.now() - ticketTime < TICKET_MAX_AGE_MS)) {
+                            authorized = true;
+                        }
+                    }
+                } catch(e) {}
+            }
+
+            // 4. Decision: If authorized, grant session and clean URL
+            if (authorized) {
+                sessionStorage.setItem('sp_wms_authorized', 'true');
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState(null, document.title, window.location.pathname);
+                }
+            } else {
+                // NOT AUTHORIZED! Prevent UI rendering and kick to Dashboard login immediately
+                document.documentElement.style.display = 'none';
+                window.location.replace(DASHBOARD_URL);
+            }
+        })();
+    </script>
+
     <!-- Security & Anti-DevTools Protection -->
     <script>
         (function() {
