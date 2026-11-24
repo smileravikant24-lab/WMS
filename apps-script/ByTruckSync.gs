@@ -670,6 +670,98 @@ function upsertByTruckRows_(sheet, records, kind) {
     updates.push({ row: targetRow, sourceKey: record.sourceKey, values: record.values });
   });
 
+  // Preserve manual sheet entries (e.g. Freight, Insurance) if source had 0/blank
+  updates.forEach(function (update) {
+    const rowIndex = update.row - 2;
+    if (rowIndex >= 0 && rowIndex < existingRows.length) {
+      const existingRow = existingRows[rowIndex];
+
+      if (kind === 'purchase') {
+        let changed = false;
+        // 1. Preserve Freight / Cartage if manually entered in sheet and incoming from source is 0
+        const existingFreight = columns.freight >= 0 ? toNumber_(existingRow[columns.freight]) : 0;
+        const incomingFreight = toNumber_(update.values.freight);
+        if (existingFreight > 0 && incomingFreight === 0) {
+          update.values.freight = existingFreight;
+          changed = true;
+        }
+
+        // 2. Preserve Insurance if manually entered in sheet and incoming from source is 0
+        const existingInsurance = columns.insurance >= 0 ? toNumber_(existingRow[columns.insurance]) : 0;
+        const incomingInsurance = toNumber_(update.values.insurance);
+        if (existingInsurance > 0 && incomingInsurance === 0) {
+          update.values.insurance = existingInsurance;
+          changed = true;
+        }
+
+        // 3. Preserve Loading if manually entered
+        const existingLoading = columns.loading >= 0 ? toNumber_(existingRow[columns.loading]) : 0;
+        const incomingLoading = toNumber_(update.values.loading);
+        if (existingLoading > 0 && incomingLoading === 0) {
+          update.values.loading = existingLoading;
+        }
+
+        // 4. Preserve Extras Claimed if manually entered
+        if (columns.extrasClaim >= 0) {
+          const existingClaim = cleanText_(existingRow[columns.extrasClaim]);
+          if (existingClaim && (!update.values.extrasClaim || update.values.extrasClaim === 'No' || update.values.extrasClaim === 0)) {
+            update.values.extrasClaim = existingClaim;
+          }
+        }
+
+        // Only recalculate Net Buy if freight or insurance was preserved from sheet
+        if (changed && update.values.qtyReam > 0) {
+          const effFreight = toNumber_(update.values.freight);
+          const effInsurance = toNumber_(update.values.insurance);
+          const weight = (update.values.ratePerKg && update.values.ratePerKg > 0)
+            ? (update.values.pricePerReam / update.values.ratePerKg)
+            : 2.34;
+          update.values.netBuyPerReam = (update.values.amount + effFreight + effInsurance) / update.values.qtyReam;
+          update.values.netBuyPerKg = update.values.netBuyPerReam / weight;
+        }
+      } else if (kind === 'sales') {
+        let extraFreightDeduction = 0;
+        // 1. Preserve Freight in Sales if manually entered in sheet
+        const existingFreight = columns.freight >= 0 ? toNumber_(existingRow[columns.freight]) : 0;
+        const incomingFreight = toNumber_(update.values.freight);
+        if (existingFreight > 0 && incomingFreight === 0) {
+          update.values.freight = existingFreight;
+          const isRec = columns.recovered >= 0
+            ? String(existingRow[columns.recovered] || '').toLowerCase().trim() === 'yes'
+            : false;
+          if (!isRec) extraFreightDeduction = existingFreight;
+        }
+
+        // 2. Preserve Recovered? in Sales if manually set
+        if (columns.recovered >= 0) {
+          const existingRec = cleanText_(existingRow[columns.recovered]);
+          if (existingRec && (!update.values.recovered || update.values.recovered === 'No')) {
+            update.values.recovered = existingRec;
+          }
+        }
+
+        // 3. Preserve Discount in Sales if manually entered
+        const existingDisc = columns.discount >= 0 ? toNumber_(existingRow[columns.discount]) : 0;
+        const incomingDisc = toNumber_(update.values.discount);
+        if (existingDisc > 0 && incomingDisc === 0) {
+          update.values.discount = existingDisc;
+        }
+
+        // 4. Preserve Pad No if manually entered
+        if (columns.padNo >= 0) {
+          const existingPad = cleanText_(existingRow[columns.padNo]);
+          if (existingPad && !update.values.padNo) {
+            update.values.padNo = existingPad;
+          }
+        }
+
+        if (extraFreightDeduction > 0) {
+          update.values.profit = roundMoney_(update.values.profit - extraFreightDeduction);
+        }
+      }
+    }
+  });
+
   const lastRow = Math.max(sheet.getLastRow(), nextRow - 1);
   Object.keys(columns).forEach(function (field) {
     const column = columns[field] + 1;

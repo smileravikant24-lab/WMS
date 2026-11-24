@@ -488,3 +488,30 @@ test('populates all columns including Mill, Warehouse, Unit Type, Bill Type, and
   assert.equal(sSheet.data[1][sHeaders.indexOf('Recovered?')], 'No');
   assert.ok(sSheet.data[1][sHeaders.indexOf('Mills')]);
 });
+
+test('preserves manually entered freight in PurchaseLog_By Truck when source has zero freight', () => {
+  const { context, source, wms } = createHarness();
+  const purchaseSource = source.getSheetByName('Orders (Readable)');
+  const pSheet = wms.getSheetByName('PurchaseLog_By Truck');
+
+  // Initial purchase with 0 insurance and 0 freight from form/source
+  appendSource(purchaseSource, sourcePurchase('PO-MANUAL-FREIGHT', 10, 110, 0, 0, 'yes', '20/11/2026'));
+  context.syncByTruckData();
+
+  const pHeaders = pSheet.data[0];
+  const cartageCol = pHeaders.indexOf('Cartage');
+  const netBuyCol = pHeaders.indexOf('Net Buy Ream');
+  assert.equal(pSheet.data[1][cartageCol], 0);
+
+  // User manually fills Freight (Cartage = 500) directly in the sheet
+  pSheet.data[1][cartageCol] = 500;
+
+  // Next sync cycle runs (source still has 0 freight)
+  context.syncByTruckData();
+
+  // Verify that the manually entered freight is PRESERVED and not wiped to 0!
+  assert.equal(pSheet.data[1][cartageCol], 500);
+  // Verify Net Buy Ream is recalculated to include the 500 freight
+  const expectedNetBuy = (pSheet.data[1][pHeaders.indexOf('Amount')] + 500) / pSheet.data[1][pHeaders.indexOf('Qty')];
+  assert.equal(pSheet.data[1][netBuyCol], expectedNetBuy);
+});
