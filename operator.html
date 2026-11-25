@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mukherjee Nagar & Transfer Portal - Satija Paper</title>
+
+    <!-- ── AUTH VERIFICATION GATE (Blocks Direct / Unauthorized Access) ── -->
+    <script>
+        (function() {
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                return;
+            }
+
+            const TICKET_MAX_AGE_MS = 60 * 1000;
+            const DASHBOARD_URL = "https://satijapaper.com/dashboard/";
+
+            if (sessionStorage.getItem('sp_op_authorized') === 'true') {
+                return;
+            }
+
+            let authorized = false;
+
+            try {
+                const rawTicket = localStorage.getItem('sp_wms_access_ticket');
+                if (rawTicket) {
+                    const ticket = JSON.parse(rawTicket);
+                    if (ticket && ticket.t && (Date.now() - ticket.t < TICKET_MAX_AGE_MS)) {
+                        authorized = true;
+                        if (ticket.u) sessionStorage.setItem('sp_op_user', ticket.u);
+                        localStorage.removeItem('sp_wms_access_ticket');
+                    }
+                }
+            } catch(e) {}
+
+            if (!authorized) {
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const authTicket = params.get('auth_ticket');
+                    if (authTicket) {
+                        const parts = atob(decodeURIComponent(authTicket)).split(':');
+                        const ticketTime = parseInt(parts[0], 10);
+                        if (ticketTime && (Date.now() - ticketTime < TICKET_MAX_AGE_MS)) {
+                            authorized = true;
+                            if (parts[1]) sessionStorage.setItem('sp_op_user', parts[1]);
+                        }
+                    }
+                } catch(e) {}
+            }
+
+            if (authorized) {
+                sessionStorage.setItem('sp_op_authorized', 'true');
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState(null, document.title, window.location.pathname);
+                }
+            } else {
+                document.documentElement.style.display = 'none';
+                window.location.replace(DASHBOARD_URL);
+            }
+        })();
+    </script>
+
+    <!-- Security & Anti-DevTools Protection -->
+    <script>
+        (function() {
+            document.addEventListener('contextmenu', function(e) {
+                e.preventDefault();
+                return false;
+            }, { capture: true });
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'F12' || e.keyCode === 123) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+                if ((e.ctrlKey || e.metaKey) && e.shiftKey && 
+                    ['I', 'i', 'J', 'j', 'C', 'c', 'K', 'k', 'E', 'e'].includes(e.key)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+                if ((e.ctrlKey || e.metaKey) && ['u', 'U', 's', 'S', 'p', 'P'].includes(e.key)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }
+            }, { capture: true });
+
+            const noop = function() {};
+            ['log', 'debug', 'info', 'warn', 'error', 'table', 'dir', 'clear'].forEach(function(method) {
+                try { window.console[method] = noop; } catch(e) {}
+            });
+
+            setInterval(function() {
+                (function() { return false; }['constructor']('debugger')['call']());
+            }, 400);
+        })();
+    </script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com/3.4.1"></script>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for in-browser JSX parsing -->
+    <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+    <!-- SweetAlert2 for notifications -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #0f172a; color: #f8fafc; }
+        .tab-btn-active { background: #2563eb; color: #ffffff; box-shadow: 0 10px 25px -5px rgba(37,99,235,0.5); }
+        .btn-spin::before { content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 8px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .custom-scroll::-webkit-scrollbar { width: 6px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzlacDY0a57_q_bnch1hLZRVIMX3l6-mcjwykdjes0dxLpmuWUcCOlZa-xGKwHm-mij/exec";
+        const OPERATOR_WH = "Mukherjee Nagar";
+        const TRANSFER_TARGETS = ["Khera Kalan"];
+        const SALES_PERSONS = ["Chandresh Sale", "Dilip Sale", "Mr. Mukesh", "Mr. Pawan", "Mr. Pranav", "Mr. Rishabh"];
+        const LOGO_URL = "https://lh3.googleusercontent.com/d/1yncNH52_uB8UKEaz6ut1eoqqMwN0gnEl";
+
+        async function gasApi(action, params = {}, payload = null) {
+            if (payload) {
+                const response = await fetch(APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(payload)
+                });
+                return await response.json();
+            } else {
+                const qs = new URLSearchParams({ action, ...params });
+                const url = APPS_SCRIPT_URL + (APPS_SCRIPT_URL.includes('?') ? '&' : '?') + qs.toString();
+                const response = await fetch(url, { cache: 'no-store' });
+                return await response.json();
+            }
+        }
+
+        function OperatorApp() {
+            const [activeTab, setActiveTab] = useState('in'); // 'in', 'out', 'transfer', 'stock'
+            const [products, setProducts] = useState([]);
+            const [parties, setParties] = useState([]);
+            const [stockItems, setStockItems] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [submitting, setSubmitting] = useState(false);
+            const [userEmail, setUserEmail] = useState('');
+
+            // Common Form State
+            const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
+            const [selectedProduct, setSelectedProduct] = useState(null);
+            const [productSearch, setProductSearch] = useState('');
+            const [showProdDD, setShowProdDD] = useState(false);
+            const [qty, setQty] = useState('');
+            const [rate, setRate] = useState('');
+
+            // Inward Specific
+            const [billType, setBillType] = useState('GST');
+
+            // Outward Specific
+            const [salesPerson, setSalesPerson] = useState('');
+            const [partySearch, setPartySearch] = useState('');
+            const [showPartyDD, setShowPartyDD] = useState(false);
+            const [padNo, setPadNo] = useState('');
+            const [billNo, setBillNo] = useState('');
+            const [discount, setDiscount] = useState('0');
+
+            // Transfer Specific
+            const [transferDirection, setTransferDirection] = useState('MN_TO_KK'); // MN_TO_KK or KK_TO_MN
+
+            // Cart Items for multi-item submission
+            const [cart, setCart] = useState([]);
+
+            // Stock filter
+            const [stockFilter, setStockFilter] = useState('');
+
+            useEffect(() => {
+                const u = sessionStorage.getItem('sp_op_user') || 'operator@satijapaper.com';
+                setUserEmail(u);
+                loadInitialData();
+            }, []);
+
+            const loadInitialData = async () => {
+                setLoading(true);
+                try {
+                    const [prodRes, partyRes, dashRes] = await Promise.all([
+                        gasApi('getProductMasterList'),
+                        gasApi('getPartyList'),
+                        gasApi('getDashboardData')
+                    ]);
+
+                    if (prodRes && Array.isArray(prodRes)) {
+                        setProducts(prodRes);
+                    }
+                    if (partyRes && Array.isArray(partyRes)) {
+                        setParties(partyRes);
+                    }
+                    if (dashRes && dashRes.items) {
+                        setStockItems(dashRes.items);
+                    }
+                } catch(e) {
+                    Swal.fire({ icon: 'error', title: 'Connection Error', text: 'Data load nahi ho saka. Refresh karein.' });
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const refreshStock = async () => {
+                try {
+                    const dashRes = await gasApi('getDashboardData');
+                    if (dashRes && dashRes.items) setStockItems(dashRes.items);
+                    Swal.fire({ icon: 'success', title: 'Stock Refreshed', timer: 1200, showConfirmButton: false });
+                } catch(e) {}
+            };
+
+            // Current Mukherjee Nagar stock map: "mill|product" -> qty
+            const mnStockMap = useMemo(() => {
+                const map = {};
+                stockItems.forEach(it => {
+                    if (it.warehouse === OPERATOR_WH) {
+                        const key = `${(it.mill || '').trim().toLowerCase()}|${(it.product || '').trim().toLowerCase()}`;
+                        map[key] = Number(it.qty) || 0;
+                    }
+                });
+                return map;
+            }, [stockItems]);
+
+            // Khera Kalan stock map for transfers: "mill|product" -> qty
+            const kkStockMap = useMemo(() => {
+                const map = {};
+                stockItems.forEach(it => {
+                    if (it.warehouse === 'Khera Kalan') {
+                        const key = `${(it.mill || '').trim().toLowerCase()}|${(it.product || '').trim().toLowerCase()}`;
+                        map[key] = Number(it.qty) || 0;
+                    }
+                });
+                return map;
+            }, [stockItems]);
+
+            const filteredProducts = useMemo(() => {
+                if (!productSearch) return [];
+                const s = productSearch.toLowerCase();
+                return products.filter(p => (p.name || '').toLowerCase().includes(s) || (p.mill || '').toLowerCase().includes(s)).slice(0, 10);
+            }, [products, productSearch]);
+
+            const filteredParties = useMemo(() => {
+                if (!partySearch) return [];
+                const s = partySearch.toLowerCase();
+                return parties.filter(p => p.toLowerCase().includes(s)).slice(0, 10);
+            }, [parties, partySearch]);
+
+            // Mukherjee Nagar only stock list for Stock Tab
+            const mnStockList = useMemo(() => {
+                const list = stockItems.filter(it => it.warehouse === OPERATOR_WH && Number(it.qty) > 0);
+                if (!stockFilter) return list;
+                const s = stockFilter.toLowerCase();
+                return list.filter(it => (it.product || '').toLowerCase().includes(s) || (it.mill || '').toLowerCase().includes(s));
+            }, [stockItems, stockFilter]);
+
+            const currentSelectedAvailable = useMemo(() => {
+                if (!selectedProduct) return null;
+                const key = `${(selectedProduct.mill || '').trim().toLowerCase()}|${(selectedProduct.name || '').trim().toLowerCase()}`;
+                if (activeTab === 'transfer' && transferDirection === 'KK_TO_MN') {
+                    return kkStockMap[key] || 0;
+                }
+                return mnStockMap[key] || 0;
+            }, [selectedProduct, activeTab, transferDirection, mnStockMap, kkStockMap]);
+
+            const handleSelectProduct = (p) => {
+                setSelectedProduct(p);
+                setProductSearch(`${p.mill} - ${p.name}`);
+                setShowProdDD(false);
+            };
+
+            const resetItemFields = () => {
+                setSelectedProduct(null);
+                setProductSearch('');
+                setQty('');
+                setRate('');
+            };
+
+            const addItemToCart = () => {
+                if (!selectedProduct) {
+                    Swal.fire({ icon: 'warning', title: 'Product Select Karein', text: 'Kripya list me se product select karein.' });
+                    return;
+                }
+                const q = Number(qty);
+                if (!q || q <= 0) {
+                    Swal.fire({ icon: 'warning', title: 'Invalid Quantity', text: 'Sahi quantity bharein.' });
+                    return;
+                }
+
+                if (activeTab === 'out' || (activeTab === 'transfer' && transferDirection === 'MN_TO_KK')) {
+                    const available = currentSelectedAvailable || 0;
+                    if (q > available) {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Stock Out of Range',
+                            text: `Mukherjee Nagar me sirf ${available} available hai! Aapne ${q} bhara hai.`
+                        });
+                        return;
+                    }
+                }
+
+                if (activeTab === 'transfer' && transferDirection === 'KK_TO_MN') {
+                    const available = currentSelectedAvailable || 0;
+                    if (q > available) {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Stock Out of Range',
+                            text: `Khera Kalan me sirf ${available} available hai! Aapne ${q} bhara hai.`
+                        });
+                        return;
+                    }
+                }
+
+                const r = Number(rate) || 0;
+                if (r <= 0) {
+                    Swal.fire({ icon: 'warning', title: 'Rate Missing', text: 'Rate/Price bharna zaroori hai.' });
+                    return;
+                }
+
+                const newItem = {
+                    id: Date.now(),
+                    mill: selectedProduct.mill,
+                    product: selectedProduct.name,
+                    qty: q,
+                    price: r,
+                    rate: r,
+                    billType: billType,
+                    unit: selectedProduct.unit || 'Ream',
+                    discount: Number(discount) || 0
+                };
+
+                setCart([...cart, newItem]);
+                resetItemFields();
+            };
+
+            const removeItemFromCart = (id) => {
+                setCart(cart.filter(item => item.id !== id));
+            };
+
+            const handleSubmitTransaction = async () => {
+                if (cart.length === 0) {
+                    Swal.fire({ icon: 'warning', title: 'List Khali Hai', text: 'Pehle item add karein.' });
+                    return;
+                }
+
+                if (activeTab === 'out') {
+                    if (!partySearch) {
+                        Swal.fire({ icon: 'warning', title: 'Party Name Missing', text: 'Kripya Party Name bharein.' });
+                        return;
+                    }
+                    if (!salesPerson) {
+                        Swal.fire({ icon: 'warning', title: 'Sales Person Missing', text: 'Sales Person select karein.' });
+                        return;
+                    }
+                }
+
+                setSubmitting(true);
+                try {
+                    let payload = {};
+
+                    if (activeTab === 'in') {
+                        payload = {
+                            action: 'STOCK_IN',
+                            date: formDate,
+                            warehouse: OPERATOR_WH,
+                            billType: billType,
+                            items: cart.map(i => ({
+                                mill: i.mill,
+                                product: i.product,
+                                qty: i.qty,
+                                price: i.price,
+                                unit: i.unit,
+                                billType: i.billType
+                            }))
+                        };
+                    } else if (activeTab === 'out') {
+                        payload = {
+                            action: 'STOCK_OUT',
+                            date: formDate,
+                            warehouse: OPERATOR_WH,
+                            salesPerson: salesPerson,
+                            partyName: partySearch.toUpperCase().trim(),
+                            padNo: padNo,
+                            billNo: billNo,
+                            freight: '0',
+                            freightRecovered: 'No',
+                            items: cart.map(i => ({
+                                mill: i.mill,
+                                product: i.product,
+                                qty: i.qty,
+                                price: i.price,
+                                discount: i.discount || 0,
+                                billType: i.billType || 'GST'
+                            }))
+                        };
+                    } else if (activeTab === 'transfer') {
+                        const fromWh = transferDirection === 'MN_TO_KK' ? OPERATOR_WH : 'Khera Kalan';
+                        const toWh = transferDirection === 'MN_TO_KK' ? 'Khera Kalan' : OPERATOR_WH;
+
+                        payload = {
+                            action: 'TRANSFER',
+                            date: formDate,
+                            warehouse: fromWh,
+                            toWarehouse: toWh,
+                            items: cart.map(i => ({
+                                mill: i.mill,
+                                product: i.product,
+                                qty: i.qty,
+                                rate: i.rate || i.price
+                            }))
+                        };
+                    }
+
+                    const res = await gasApi('processData', {}, payload);
+
+                    if (res && res.status === 'success') {
+                        await Swal.fire({
+                            icon: 'success',
+                            title: 'Success!',
+                            text: res.message || 'Transaction successfully save ho gaya!',
+                            timer: 2000,
+                            showConfirmButton: false
+                        });
+                        setCart([]);
+                        resetItemFields();
+                        setPartySearch('');
+                        setPadNo('');
+                        setBillNo('');
+                        // Reload live stock
+                        const dashRes = await gasApi('getDashboardData');
+                        if (dashRes && dashRes.items) setStockItems(dashRes.items);
+                    } else {
+                        throw new Error(res.message || 'Operation failed');
+                    }
+                } catch(err) {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Submission Failed',
+                        text: err.message || err.toString()
+                    });
+                } finally {
+                    setSubmitting(false);
+                }
+            };
+
+            return (
+                <div className="flex-1 flex flex-col">
+                    {/* Header */}
+                    <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between shadow-xl">
+                        <div className="flex items-center gap-3">
+                            <img src={LOGO_URL} alt="Logo" className="w-9 h-9 rounded-full border border-blue-500 object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                            <div>
+                                <h1 className="font-black text-sm md:text-base text-white tracking-wide">Mukherjee Nagar & Transfer Portal</h1>
+                                <p className="text-[10px] text-blue-400 font-bold uppercase tracking-widest">Satija Paper Warehouse Staff</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="hidden sm:inline-block px-2.5 py-1 bg-blue-950 text-blue-300 border border-blue-800 rounded-full text-[10px] font-bold">
+                                👤 {userEmail}
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded-full text-[10px] font-black">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                ONLINE
+                            </span>
+                        </div>
+                    </header>
+
+                    {/* Navigation Tabs */}
+                    <nav className="bg-slate-900/60 backdrop-blur border-b border-slate-800 px-4 py-2 overflow-x-auto">
+                        <div className="flex gap-2 min-w-max max-w-4xl mx-auto">
+                            <button onClick={() => { setActiveTab('in'); setCart([]); }} className={`px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition ${activeTab === 'in' ? 'tab-btn-active' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                                📥 Stock Inward
+                            </button>
+                            <button onClick={() => { setActiveTab('out'); setCart([]); }} className={`px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition ${activeTab === 'out' ? 'tab-btn-active' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                                📤 Sales Dispatch
+                            </button>
+                            <button onClick={() => { setActiveTab('transfer'); setCart([]); }} className={`px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition ${activeTab === 'transfer' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/30' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                                🔄 Stock Transfer
+                            </button>
+                            <button onClick={() => setActiveTab('stock')} className={`px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition ${activeTab === 'stock' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                                📊 Mukherjee Nagar Stock
+                            </button>
+                        </div>
+                    </nav>
+
+                    {/* Main Content Area */}
+                    <main className="flex-1 p-4 md:p-6 max-w-4xl w-full mx-auto">
+                        {loading ? (
+                            <div className="flex flex-col items-center justify-center h-64 gap-3 text-slate-400">
+                                <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                <p className="text-xs font-bold uppercase tracking-wider">Loading System Data...</p>
+                            </div>
+                        ) : activeTab === 'stock' ? (
+                            /* Stock View Tab */
+                            <div className="space-y-4">
+                                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-900 p-4 rounded-2xl border border-slate-800">
+                                    <div>
+                                        <h2 className="font-black text-white text-base">Mukherjee Nagar Available Stock</h2>
+                                        <p className="text-xs text-slate-400">Kul {mnStockList.length} items stock me uplabdh hain</p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="text"
+                                            placeholder="Search product..."
+                                            value={stockFilter}
+                                            onChange={e => setStockFilter(e.target.value)}
+                                            className="px-3 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl border border-slate-700 outline-none focus:border-blue-500"
+                                        />
+                                        <button onClick={refreshStock} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition">
+                                            ↻ Refresh
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-xl">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left text-xs">
+                                            <thead className="bg-slate-950 text-slate-400 uppercase font-bold tracking-wider text-[10px]">
+                                                <tr>
+                                                    <th className="p-3">#</th>
+                                                    <th className="p-3">Mill</th>
+                                                    <th className="p-3">Product Name</th>
+                                                    <th className="p-3 text-right">Available Qty (Reams)</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-800 font-bold">
+                                                {mnStockList.map((item, idx) => (
+                                                    <tr key={idx} className="hover:bg-slate-800/50 transition">
+                                                        <td className="p-3 text-slate-500">{idx + 1}</td>
+                                                        <td className="p-3 text-blue-400 uppercase">{item.mill}</td>
+                                                        <td className="p-3 text-white uppercase">{item.product}</td>
+                                                        <td className="p-3 text-right text-emerald-400 font-black text-sm">
+                                                            {Number(item.qty).toLocaleString('en-IN')}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {mnStockList.length === 0 && (
+                                                    <tr>
+                                                        <td colSpan="4" className="p-8 text-center text-slate-500 font-bold">
+                                                            Koi stock nahi mila.
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            /* Transaction Forms: Inward, Outward, Transfer */
+                            <div className="space-y-6">
+                                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl">
+                                    <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
+                                        <div>
+                                            <h2 className="text-base font-black text-white">
+                                                {activeTab === 'in' && '📥 Mukherjee Nagar Stock Inward'}
+                                                {activeTab === 'out' && '📤 Mukherjee Nagar Sales Dispatch'}
+                                                {activeTab === 'transfer' && '🔄 Inter-Warehouse Stock Transfer'}
+                                            </h2>
+                                            <p className="text-[11px] text-slate-400 font-semibold">
+                                                {activeTab === 'in' && 'Mukherjee Nagar godown me aane wala stock enter karein.'}
+                                                {activeTab === 'out' && 'Mukherjee Nagar se bheja gaya sales dispatch bill enter karein.'}
+                                                {activeTab === 'transfer' && 'Mukherjee Nagar aur Khera Kalan ke beech stock move karein.'}
+                                            </p>
+                                        </div>
+                                        <div className="text-right">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase block">Date</label>
+                                            <input
+                                                type="date"
+                                                value={formDate}
+                                                onChange={e => setFormDate(e.target.value)}
+                                                className="bg-slate-800 text-white font-bold text-xs p-2 rounded-xl border border-slate-700 outline-none"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Transfer Direction Toggle (Transfer Only) */}
+                                    {activeTab === 'transfer' && (
+                                        <div className="mb-5 p-4 bg-orange-950/40 border border-orange-800/60 rounded-2xl">
+                                            <label className="text-[10px] font-black uppercase text-orange-400 block mb-2 tracking-widest">
+                                                Transfer Direction
+                                            </label>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { setTransferDirection('MN_TO_KK'); setCart([]); }}
+                                                    className={`p-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 border transition ${transferDirection === 'MN_TO_KK' ? 'bg-orange-600 text-white border-orange-500 shadow-lg' : 'bg-slate-800 text-slate-300 border-slate-700'}`}
+                                                >
+                                                    <span>🏢 Mukherjee Nagar</span>
+                                                    <span>➡️</span>
+                                                    <span>🏭 Khera Kalan</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { setTransferDirection('KK_TO_MN'); setCart([]); }}
+                                                    className={`p-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 border transition ${transferDirection === 'KK_TO_MN' ? 'bg-orange-600 text-white border-orange-500 shadow-lg' : 'bg-slate-800 text-slate-300 border-slate-700'}`}
+                                                >
+                                                    <span>🏭 Khera Kalan</span>
+                                                    <span>➡️</span>
+                                                    <span>🏢 Mukherjee Nagar</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Outward Header Fields (Party, Pad, Bill, SalesPerson) */}
+                                    {activeTab === 'out' && (
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-5 p-4 bg-slate-950 rounded-2xl border border-slate-800">
+                                            {/* Party Name Autocomplete */}
+                                            <div className="sm:col-span-2 relative">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Party Name</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Search Party Name..."
+                                                    value={partySearch}
+                                                    onChange={e => { setPartySearch(e.target.value.toUpperCase()); setShowPartyDD(true); }}
+                                                    onFocus={() => setShowPartyDD(true)}
+                                                    className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none focus:border-blue-500 uppercase"
+                                                />
+                                                {showPartyDD && partySearch.length > 0 && (
+                                                    <div className="absolute w-full bg-slate-800 border border-slate-700 rounded-xl mt-1 z-50 max-h-48 overflow-y-auto shadow-2xl">
+                                                        {filteredParties.map((p, idx) => (
+                                                            <div
+                                                                key={idx}
+                                                                onClick={() => { setPartySearch(p); setShowPartyDD(false); }}
+                                                                className="p-2.5 text-xs font-bold text-white hover:bg-blue-600 cursor-pointer border-b border-slate-700/50"
+                                                            >
+                                                                {p}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Sales Person */}
+                                            <div>
+                                                <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Sales Person</label>
+                                                <select
+                                                    value={salesPerson}
+                                                    onChange={e => setSalesPerson(e.target.value)}
+                                                    className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none"
+                                                >
+                                                    <option value="">-- Choose Name --</option>
+                                                    {SALES_PERSONS.map(s => <option key={s} value={s}>{s}</option>)}
+                                                </select>
+                                            </div>
+
+                                            {/* Pad No / Bill No */}
+                                            <div className="flex gap-2">
+                                                <div className="flex-1">
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Pad #</label>
+                                                    <input
+                                                        type="number"
+                                                        value={padNo}
+                                                        onChange={e => setPadNo(e.target.value)}
+                                                        className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none"
+                                                    />
+                                                </div>
+                                                <div className="flex-1">
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Bill #</label>
+                                                    <input
+                                                        type="text"
+                                                        value={billNo}
+                                                        onChange={e => setBillNo(e.target.value)}
+                                                        className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Item Input Row */}
+                                    <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
+                                        <h3 className="text-xs font-black text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                                            <span>Add Item to List</span>
+                                            {selectedProduct && currentSelectedAvailable !== null && (
+                                                <span className="text-[11px] font-black text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded-md border border-emerald-800">
+                                                    Available: {currentSelectedAvailable} Reams
+                                                </span>
+                                            )}
+                                        </h3>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                                            {/* Product Search */}
+                                            <div className="sm:col-span-6 relative">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Select Product</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Search Product / Mill..."
+                                                    value={productSearch}
+                                                    onChange={e => { setProductSearch(e.target.value); setShowProdDD(true); }}
+                                                    onFocus={() => setShowProdDD(true)}
+                                                    className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none focus:border-blue-500 uppercase"
+                                                />
+                                                {showProdDD && productSearch.length > 0 && (
+                                                    <div className="absolute w-full bg-slate-800 border border-slate-700 rounded-xl mt-1 z-50 max-h-48 overflow-y-auto shadow-2xl">
+                                                        {filteredProducts.map((p, idx) => (
+                                                            <div
+                                                                key={idx}
+                                                                onClick={() => handleSelectProduct(p)}
+                                                                className="p-2.5 text-xs hover:bg-blue-600 cursor-pointer border-b border-slate-700/50 flex justify-between items-center"
+                                                            >
+                                                                <div>
+                                                                    <div className="text-[10px] text-slate-400 font-bold">{p.mill}</div>
+                                                                    <div className="font-bold text-white">{p.name}</div>
+                                                                </div>
+                                                                <span className="text-[9px] bg-slate-700 px-2 py-0.5 rounded text-slate-300 font-bold">SELECT</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Quantity */}
+                                            <div className="sm:col-span-2">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Qty (Reams)</label>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    value={qty}
+                                                    onChange={e => setQty(e.target.value)}
+                                                    placeholder="Qty"
+                                                    className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none"
+                                                />
+                                            </div>
+
+                                            {/* Rate */}
+                                            <div className="sm:col-span-2">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">
+                                                    {activeTab === 'transfer' ? 'Transfer Rate ₹' : 'Rate ₹'}
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    step="any"
+                                                    value={rate}
+                                                    onChange={e => setRate(e.target.value)}
+                                                    placeholder="₹ Rate"
+                                                    className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none"
+                                                />
+                                            </div>
+
+                                            {/* Inward Bill Type / Outward Discount */}
+                                            {activeTab === 'in' && (
+                                                <div className="sm:col-span-2">
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Bill Type</label>
+                                                    <select
+                                                        value={billType}
+                                                        onChange={e => setBillType(e.target.value)}
+                                                        className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none"
+                                                    >
+                                                        <option value="GST">GST</option>
+                                                        <option value="NON-GST">NON-GST</option>
+                                                    </select>
+                                                </div>
+                                            )}
+
+                                            {activeTab === 'out' && (
+                                                <div className="sm:col-span-2">
+                                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Discount ₹</label>
+                                                    <input
+                                                        type="number"
+                                                        value={discount}
+                                                        onChange={e => setDiscount(e.target.value)}
+                                                        className="w-full bg-slate-800 text-white p-2.5 rounded-xl border border-slate-700 font-bold text-xs outline-none"
+                                                    />
+                                                </div>
+                                            )}
+
+                                            {activeTab === 'transfer' && (
+                                                <div className="sm:col-span-2 flex items-end">
+                                                    <button
+                                                        type="button"
+                                                        onClick={addItemToCart}
+                                                        className="w-full p-2.5 bg-orange-600 hover:bg-orange-500 text-white font-black text-xs rounded-xl shadow-lg transition"
+                                                    >
+                                                        + ADD ITEM
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {activeTab !== 'transfer' && (
+                                            <div className="flex justify-end pt-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={addItemToCart}
+                                                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl shadow-lg transition"
+                                                >
+                                                    + ADD ITEM TO LIST
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Cart / Staged Items Table */}
+                                    {cart.length > 0 && (
+                                        <div className="mt-5 space-y-3">
+                                            <h3 className="text-xs font-black text-slate-300 uppercase tracking-wider">
+                                                Items Ready to Save ({cart.length})
+                                            </h3>
+                                            <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+                                                <table className="w-full text-left text-xs">
+                                                    <thead className="bg-slate-900 text-slate-400 uppercase text-[10px] font-bold">
+                                                        <tr>
+                                                            <th className="p-3">Product</th>
+                                                            <th className="p-3 text-right">Qty</th>
+                                                            <th className="p-3 text-right">Rate</th>
+                                                            <th className="p-3 text-right">Total</th>
+                                                            <th className="p-3 text-center">Action</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-800 font-bold">
+                                                        {cart.map(item => {
+                                                            const itemTotal = (item.qty * item.price) - (item.discount || 0);
+                                                            return (
+                                                                <tr key={item.id} className="hover:bg-slate-900/50">
+                                                                    <td className="p-3">
+                                                                        <div className="text-[10px] text-slate-400">{item.mill}</div>
+                                                                        <div className="text-white">{item.product}</div>
+                                                                    </td>
+                                                                    <td className="p-3 text-right text-emerald-400">{item.qty} {item.unit}</td>
+                                                                    <td className="p-3 text-right text-slate-300">₹{item.price}</td>
+                                                                    <td className="p-3 text-right text-white">₹{itemTotal.toFixed(2)}</td>
+                                                                    <td className="p-3 text-center">
+                                                                        <button
+                                                                            onClick={() => removeItemFromCart(item.id)}
+                                                                            className="px-2 py-1 bg-rose-950 text-rose-400 border border-rose-800 rounded text-[10px] hover:bg-rose-900 font-bold"
+                                                                        >
+                                                                            Remove
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            {/* Submit Button */}
+                                            <button
+                                                onClick={handleSubmitTransaction}
+                                                disabled={submitting}
+                                                className={`w-full py-4 rounded-xl font-black text-sm uppercase tracking-wider text-white shadow-xl transition disabled:opacity-60 ${activeTab === 'transfer' ? 'bg-orange-600 hover:bg-orange-500 shadow-orange-600/30' : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30'} ${submitting ? 'btn-spin' : ''}`}
+                                            >
+                                                {submitting ? 'Saving to Database...' : activeTab === 'in' ? '✓ SAVE STOCK INWARD' : activeTab === 'out' ? '✓ SAVE SALES DISPATCH' : '✓ CONFIRM STOCK TRANSFER'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="bg-slate-900 border-t border-slate-800 py-3 text-center text-slate-500 text-[11px] font-bold">
+                        Satija Paper Mills Private Limited &bull; Warehouse Operator Terminal
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<OperatorApp />);
+    </script>
+</body>
+</html>
