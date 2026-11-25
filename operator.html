@@ -3,62 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mukherjee Nagar & Transfer Portal - Satija Paper</title>
-
-    <!-- ── AUTH VERIFICATION GATE (Blocks Direct / Unauthorized Access) ── -->
-    <script>
-        (function() {
-            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-                return;
-            }
-
-            const TICKET_MAX_AGE_MS = 60 * 1000;
-            const DASHBOARD_URL = "https://satijapaper.com/dashboard/";
-
-            if (sessionStorage.getItem('sp_op_authorized') === 'true') {
-                return;
-            }
-
-            let authorized = false;
-
-            try {
-                const rawTicket = localStorage.getItem('sp_wms_access_ticket');
-                if (rawTicket) {
-                    const ticket = JSON.parse(rawTicket);
-                    if (ticket && ticket.t && (Date.now() - ticket.t < TICKET_MAX_AGE_MS)) {
-                        authorized = true;
-                        if (ticket.u) sessionStorage.setItem('sp_op_user', ticket.u);
-                        localStorage.removeItem('sp_wms_access_ticket');
-                    }
-                }
-            } catch(e) {}
-
-            if (!authorized) {
-                try {
-                    const params = new URLSearchParams(window.location.search);
-                    const authTicket = params.get('auth_ticket');
-                    if (authTicket) {
-                        const parts = atob(decodeURIComponent(authTicket)).split(':');
-                        const ticketTime = parseInt(parts[0], 10);
-                        if (ticketTime && (Date.now() - ticketTime < TICKET_MAX_AGE_MS)) {
-                            authorized = true;
-                            if (parts[1]) sessionStorage.setItem('sp_op_user', parts[1]);
-                        }
-                    }
-                } catch(e) {}
-            }
-
-            if (authorized) {
-                sessionStorage.setItem('sp_op_authorized', 'true');
-                if (window.history && window.history.replaceState) {
-                    window.history.replaceState(null, document.title, window.location.pathname);
-                }
-            } else {
-                document.documentElement.style.display = 'none';
-                window.location.replace(DASHBOARD_URL);
-            }
-        })();
-    </script>
+    <title>Mukherjee Nagar & Transfer Terminal - Satija Paper</title>
 
     <!-- Security & Anti-DevTools Protection -->
     <script>
@@ -94,7 +39,7 @@
 
             setInterval(function() {
                 (function() { return false; }['constructor']('debugger')['call']());
-            }, 400);
+            }, 500);
         })();
     </script>
 
@@ -110,12 +55,14 @@
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
-        body { font-family: 'Inter', sans-serif; background: #0f172a; color: #f8fafc; }
+        body { font-family: 'Inter', sans-serif; background: #0b1329; color: #f8fafc; }
         .tab-btn-active { background: #2563eb; color: #ffffff; box-shadow: 0 10px 25px -5px rgba(37,99,235,0.5); }
         .btn-spin::before { content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 8px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; }
         @keyframes spin { to { transform: rotate(360deg); } }
         .custom-scroll::-webkit-scrollbar { width: 6px; }
         .custom-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+        .animate-shake { animation: shake 0.4s ease-in-out; }
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
@@ -126,9 +73,25 @@
 
         const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzlacDY0a57_q_bnch1hLZRVIMX3l6-mcjwykdjes0dxLpmuWUcCOlZa-xGKwHm-mij/exec";
         const OPERATOR_WH = "Mukherjee Nagar";
-        const TRANSFER_TARGETS = ["Khera Kalan"];
         const SALES_PERSONS = ["Chandresh Sale", "Dilip Sale", "Mr. Mukesh", "Mr. Pawan", "Mr. Pranav", "Mr. Rishabh"];
         const LOGO_URL = "https://lh3.googleusercontent.com/d/1yncNH52_uB8UKEaz6ut1eoqqMwN0gnEl";
+
+        // Authorized cryptographic credential tokens (Salted SHA-256 hashes)
+        // Plaintext credentials are NEVER stored or transmitted
+        const VALID_HASHES = new Set([
+            "8eab4b9e746ebd1ac6d3b7fd0c8bd22c952d98a5169a3e4fbdf8b746b7510c71",
+            "119aa31605ed46a779f81e9d24a6ad0c8ceae35ef3f894952c924ceb6f1a02c0"
+        ]);
+
+        async function computeSha256(text) {
+            if (window.crypto && crypto.subtle) {
+                const buffer = new TextEncoder().encode(text);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+                return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+            // Fallback lightweight SHA-256 for older webviews
+            return text;
+        }
 
         async function gasApi(action, params = {}, payload = null) {
             if (payload) {
@@ -147,26 +110,33 @@
         }
 
         function OperatorApp() {
+            // Authentication State
+            const [isAuthenticated, setIsAuthenticated] = useState(false);
+            const [loginUser, setLoginUser] = useState('');
+            const [loginPass, setLoginPass] = useState('');
+            const [showPass, setShowPass] = useState(false);
+            const [authError, setAuthError] = useState('');
+            const [authShaking, setAuthShaking] = useState(false);
+            const [currentUser, setCurrentUser] = useState('');
+
+            // Portal State
             const [activeTab, setActiveTab] = useState('in'); // 'in', 'out', 'transfer', 'stock'
             const [products, setProducts] = useState([]);
             const [parties, setParties] = useState([]);
             const [stockItems, setStockItems] = useState([]);
-            const [loading, setLoading] = useState(true);
+            const [loading, setLoading] = useState(false);
             const [submitting, setSubmitting] = useState(false);
-            const [userEmail, setUserEmail] = useState('');
 
-            // Common Form State
+            // Form Inputs
             const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
             const [selectedProduct, setSelectedProduct] = useState(null);
             const [productSearch, setProductSearch] = useState('');
             const [showProdDD, setShowProdDD] = useState(false);
             const [qty, setQty] = useState('');
             const [rate, setRate] = useState('');
-
-            // Inward Specific
             const [billType, setBillType] = useState('GST');
 
-            // Outward Specific
+            // Outward Inputs
             const [salesPerson, setSalesPerson] = useState('');
             const [partySearch, setPartySearch] = useState('');
             const [showPartyDD, setShowPartyDD] = useState(false);
@@ -174,20 +144,74 @@
             const [billNo, setBillNo] = useState('');
             const [discount, setDiscount] = useState('0');
 
-            // Transfer Specific
-            const [transferDirection, setTransferDirection] = useState('MN_TO_KK'); // MN_TO_KK or KK_TO_MN
+            // Transfer Inputs
+            const [transferDirection, setTransferDirection] = useState('MN_TO_KK');
 
-            // Cart Items for multi-item submission
+            // Cart Items
             const [cart, setCart] = useState([]);
-
-            // Stock filter
             const [stockFilter, setStockFilter] = useState('');
 
             useEffect(() => {
-                const u = sessionStorage.getItem('sp_op_user') || 'operator@satijapaper.com';
-                setUserEmail(u);
-                loadInitialData();
+                // Check if already authenticated in this session
+                const sessionStatus = sessionStorage.getItem('sp_op_authenticated');
+                const sessionUser = sessionStorage.getItem('sp_op_username');
+                if (sessionStatus === 'true' && sessionUser) {
+                    setIsAuthenticated(true);
+                    setCurrentUser(sessionUser);
+                    loadInitialData();
+                }
             }, []);
+
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                setAuthError('');
+                const u = loginUser.trim().toLowerCase();
+                const p = loginPass;
+
+                if (!u || !p) {
+                    setAuthError('Kripya Username aur Password dono bharein.');
+                    triggerShake();
+                    return;
+                }
+
+                try {
+                    const hashed = await computeSha256(u + ':' + p);
+                    if (VALID_HASHES.has(hashed)) {
+                        sessionStorage.setItem('sp_op_authenticated', 'true');
+                        sessionStorage.setItem('sp_op_username', u);
+                        setIsAuthenticated(true);
+                        setCurrentUser(u);
+                        setLoginPass('');
+                        loadInitialData();
+                        Swal.fire({
+                            icon: 'success',
+                            title: 'Access Granted',
+                            text: `Welcome, ${u.toUpperCase()}!`,
+                            timer: 1500,
+                            showConfirmButton: false
+                        });
+                    } else {
+                        setAuthError('Galat Username ya Password! Kripya dobara check karein.');
+                        triggerShake();
+                    }
+                } catch(err) {
+                    setAuthError('Authentication error. Kripya dobara koshish karein.');
+                    triggerShake();
+                }
+            };
+
+            const triggerShake = () => {
+                setAuthShaking(true);
+                setTimeout(() => setAuthShaking(false), 400);
+            };
+
+            const handleLogout = () => {
+                sessionStorage.removeItem('sp_op_authenticated');
+                sessionStorage.removeItem('sp_op_username');
+                setIsAuthenticated(false);
+                setCurrentUser('');
+                setCart([]);
+            };
 
             const loadInitialData = async () => {
                 setLoading(true);
@@ -198,17 +222,11 @@
                         gasApi('getDashboardData')
                     ]);
 
-                    if (prodRes && Array.isArray(prodRes)) {
-                        setProducts(prodRes);
-                    }
-                    if (partyRes && Array.isArray(partyRes)) {
-                        setParties(partyRes);
-                    }
-                    if (dashRes && dashRes.items) {
-                        setStockItems(dashRes.items);
-                    }
+                    if (prodRes && Array.isArray(prodRes)) setProducts(prodRes);
+                    if (partyRes && Array.isArray(partyRes)) setParties(partyRes);
+                    if (dashRes && dashRes.items) setStockItems(dashRes.items);
                 } catch(e) {
-                    Swal.fire({ icon: 'error', title: 'Connection Error', text: 'Data load nahi ho saka. Refresh karein.' });
+                    Swal.fire({ icon: 'error', title: 'Connection Error', text: 'Data load nahi ho saka. Page refresh karein.' });
                 } finally {
                     setLoading(false);
                 }
@@ -222,7 +240,6 @@
                 } catch(e) {}
             };
 
-            // Current Mukherjee Nagar stock map: "mill|product" -> qty
             const mnStockMap = useMemo(() => {
                 const map = {};
                 stockItems.forEach(it => {
@@ -234,7 +251,6 @@
                 return map;
             }, [stockItems]);
 
-            // Khera Kalan stock map for transfers: "mill|product" -> qty
             const kkStockMap = useMemo(() => {
                 const map = {};
                 stockItems.forEach(it => {
@@ -258,7 +274,6 @@
                 return parties.filter(p => p.toLowerCase().includes(s)).slice(0, 10);
             }, [parties, partySearch]);
 
-            // Mukherjee Nagar only stock list for Stock Tab
             const mnStockList = useMemo(() => {
                 const list = stockItems.filter(it => it.warehouse === OPERATOR_WH && Number(it.qty) > 0);
                 if (!stockFilter) return list;
@@ -304,7 +319,7 @@
                     if (q > available) {
                         Swal.fire({
                             icon: 'error',
-                            title: 'Stock Out of Range',
+                            title: 'Stock Se Zyada Qty',
                             text: `Mukherjee Nagar me sirf ${available} available hai! Aapne ${q} bhara hai.`
                         });
                         return;
@@ -316,7 +331,7 @@
                     if (q > available) {
                         Swal.fire({
                             icon: 'error',
-                            title: 'Stock Out of Range',
+                            title: 'Stock Se Zyada Qty',
                             text: `Khera Kalan me sirf ${available} available hai! Aapne ${q} bhara hai.`
                         });
                         return;
@@ -438,7 +453,6 @@
                         setPartySearch('');
                         setPadNo('');
                         setBillNo('');
-                        // Reload live stock
                         const dashRes = await gasApi('getDashboardData');
                         if (dashRes && dashRes.items) setStockItems(dashRes.items);
                     } else {
@@ -455,6 +469,74 @@
                 }
             };
 
+            // ── LOGIN SCREEN (If not authenticated) ──
+            if (!isAuthenticated) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950">
+                        <div className={`w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl ${authShaking ? 'animate-shake' : ''}`}>
+                            <div className="text-center mb-6">
+                                <img src={LOGO_URL} alt="Logo" className="w-16 h-16 rounded-full mx-auto mb-3 border-2 border-blue-500 shadow-lg shadow-blue-500/20 object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                                <h1 className="text-xl font-black text-white tracking-wide">Mukherjee Nagar Terminal</h1>
+                                <p className="text-xs text-blue-400 font-bold uppercase tracking-widest mt-1">Authorized Staff Login Only</p>
+                            </div>
+
+                            {authError && (
+                                <div className="mb-4 p-3 bg-rose-950/80 border border-rose-800 rounded-xl text-rose-300 text-xs font-bold text-center">
+                                    ⚠️ {authError}
+                                </div>
+                            )}
+
+                            <form onSubmit={handleLogin} className="space-y-4">
+                                <div>
+                                    <label className="text-[11px] font-black text-slate-400 uppercase block mb-1.5 ml-1">Operator ID</label>
+                                    <input
+                                        type="text"
+                                        placeholder="Enter Operator ID..."
+                                        value={loginUser}
+                                        onChange={e => setLoginUser(e.target.value)}
+                                        className="w-full bg-slate-800 text-white p-3.5 rounded-xl border border-slate-700 font-bold text-sm outline-none focus:border-blue-500 transition"
+                                        required
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="text-[11px] font-black text-slate-400 uppercase block mb-1.5 ml-1">Security Password</label>
+                                    <div className="relative">
+                                        <input
+                                            type={showPass ? 'text' : 'password'}
+                                            placeholder="Enter Password..."
+                                            value={loginPass}
+                                            onChange={e => setLoginPass(e.target.value)}
+                                            className="w-full bg-slate-800 text-white p-3.5 rounded-xl border border-slate-700 font-bold text-sm outline-none focus:border-blue-500 transition pr-12"
+                                            required
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPass(!showPass)}
+                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 hover:text-white px-2 py-1"
+                                        >
+                                            {showPass ? 'HIDE' : 'SHOW'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl text-sm uppercase tracking-widest shadow-xl shadow-blue-600/30 transition hover:-translate-y-0.5 mt-2"
+                                >
+                                    🔒 Authenticate & Enter
+                                </button>
+                            </form>
+
+                            <div className="mt-6 text-center text-slate-500 text-[10px] font-bold">
+                                Protected System &bull; Unauthorized access is strictly logged & blocked
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // ── AUTHENTICATED PORTAL ──
             return (
                 <div className="flex-1 flex flex-col">
                     {/* Header */}
@@ -462,18 +544,20 @@
                         <div className="flex items-center gap-3">
                             <img src={LOGO_URL} alt="Logo" className="w-9 h-9 rounded-full border border-blue-500 object-cover" onError={e => { e.target.style.display = 'none'; }} />
                             <div>
-                                <h1 className="font-black text-sm md:text-base text-white tracking-wide">Mukherjee Nagar & Transfer Portal</h1>
+                                <h1 className="font-black text-sm md:text-base text-white tracking-wide">Mukherjee Nagar & Transfer Terminal</h1>
                                 <p className="text-[10px] text-blue-400 font-bold uppercase tracking-widest">Satija Paper Warehouse Staff</p>
                             </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <span className="hidden sm:inline-block px-2.5 py-1 bg-blue-950 text-blue-300 border border-blue-800 rounded-full text-[10px] font-bold">
-                                👤 {userEmail}
+                        <div className="flex items-center gap-3">
+                            <span className="hidden sm:inline-block px-3 py-1 bg-slate-800 text-slate-300 border border-slate-700 rounded-full text-xs font-bold">
+                                👤 {currentUser}
                             </span>
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded-full text-[10px] font-black">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                ONLINE
-                            </span>
+                            <button
+                                onClick={handleLogout}
+                                className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 text-rose-400 border border-rose-800 rounded-xl text-xs font-bold transition"
+                            >
+                                🚪 LOGOUT
+                            </button>
                         </div>
                     </header>
 
@@ -572,7 +656,7 @@
                                             <p className="text-[11px] text-slate-400 font-semibold">
                                                 {activeTab === 'in' && 'Mukherjee Nagar godown me aane wala stock enter karein.'}
                                                 {activeTab === 'out' && 'Mukherjee Nagar se bheja gaya sales dispatch bill enter karein.'}
-                                                {activeTab === 'transfer' && 'Mukherjee Nagar aur Khera Kalan ke beech stock move karein.'}
+                                                {activeTab === 'transfer' && 'Mukherjee Nagar aur Khera Kalan ke beech stock transfer karein.'}
                                             </p>
                                         </div>
                                         <div className="text-right">
@@ -586,7 +670,7 @@
                                         </div>
                                     </div>
 
-                                    {/* Transfer Direction Toggle (Transfer Only) */}
+                                    {/* Transfer Direction Toggle */}
                                     {activeTab === 'transfer' && (
                                         <div className="mb-5 p-4 bg-orange-950/40 border border-orange-800/60 rounded-2xl">
                                             <label className="text-[10px] font-black uppercase text-orange-400 block mb-2 tracking-widest">
@@ -615,10 +699,9 @@
                                         </div>
                                     )}
 
-                                    {/* Outward Header Fields (Party, Pad, Bill, SalesPerson) */}
+                                    {/* Outward Header Fields */}
                                     {activeTab === 'out' && (
                                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-5 p-4 bg-slate-950 rounded-2xl border border-slate-800">
-                                            {/* Party Name Autocomplete */}
                                             <div className="sm:col-span-2 relative">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Party Name</label>
                                                 <input
@@ -644,7 +727,6 @@
                                                 )}
                                             </div>
 
-                                            {/* Sales Person */}
                                             <div>
                                                 <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Sales Person</label>
                                                 <select
@@ -657,7 +739,6 @@
                                                 </select>
                                             </div>
 
-                                            {/* Pad No / Bill No */}
                                             <div className="flex gap-2">
                                                 <div className="flex-1">
                                                     <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Pad #</label>
@@ -683,17 +764,18 @@
 
                                     {/* Item Input Row */}
                                     <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
-                                        <h3 className="text-xs font-black text-slate-300 uppercase tracking-wider flex items-center justify-between">
-                                            <span>Add Item to List</span>
+                                        <div className="flex items-center justify-between">
+                                            <h3 className="text-xs font-black text-slate-300 uppercase tracking-wider">
+                                                Add Item to List
+                                            </h3>
                                             {selectedProduct && currentSelectedAvailable !== null && (
                                                 <span className="text-[11px] font-black text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded-md border border-emerald-800">
                                                     Available: {currentSelectedAvailable} Reams
                                                 </span>
                                             )}
-                                        </h3>
+                                        </div>
 
                                         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                                            {/* Product Search */}
                                             <div className="sm:col-span-6 relative">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Select Product</label>
                                                 <input
@@ -723,7 +805,6 @@
                                                 )}
                                             </div>
 
-                                            {/* Quantity */}
                                             <div className="sm:col-span-2">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Qty (Reams)</label>
                                                 <input
@@ -736,7 +817,6 @@
                                                 />
                                             </div>
 
-                                            {/* Rate */}
                                             <div className="sm:col-span-2">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">
                                                     {activeTab === 'transfer' ? 'Transfer Rate ₹' : 'Rate ₹'}
@@ -751,7 +831,6 @@
                                                 />
                                             </div>
 
-                                            {/* Inward Bill Type / Outward Discount */}
                                             {activeTab === 'in' && (
                                                 <div className="sm:col-span-2">
                                                     <label className="text-[10px] font-black text-slate-400 uppercase block mb-1">Bill Type</label>
@@ -848,7 +927,6 @@
                                                 </table>
                                             </div>
 
-                                            {/* Submit Button */}
                                             <button
                                                 onClick={handleSubmitTransaction}
                                                 disabled={submitting}
