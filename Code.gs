@@ -6,8 +6,14 @@ function ciEquals(a, b) {
          (b || '').toString().toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+function ciEqualsProduct(a, b) {
+  if (ciEquals(a, b)) return true;
+  return ciEquals(normalizeProductDisplayName_(a), normalizeProductDisplayName_(b));
+}
+
 function ciKey(mill, product, warehouse) {
-  return [mill, product, warehouse].map(s => (s||'').toString().toLowerCase().replace(/\s+/g, ' ').trim()).join('||');
+  const normP = normalizeProductDisplayName_(product);
+  return [mill, normP, warehouse].map(s => (s||'').toString().toLowerCase().replace(/\s+/g, ' ').trim()).join('||');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -984,7 +990,7 @@ function _doFullRebuild(ss) {
     const mi = h.indexOf('mills') !== -1 ? h.indexOf('mills') : h.indexOf('mill'), pi = h.indexOf('product');
     const wi1 = whCol1 ? h.indexOf(whCol1.toLowerCase()) : -1, wi2 = whCol2 ? h.indexOf(whCol2.toLowerCase()) : -1;
     for (let i = 1; i < d.length; i++) {
-      const m = (d[i][mi]||'').toString().trim(), p = (d[i][pi]||'').toString().trim();
+      const m = (d[i][mi]||'').toString().trim(), p = normalizeProductDisplayName_((d[i][pi]||'').toString().trim());
       if (!m || !p) continue;
       if (explicitWh) combos.add(`${m}||${p}||${explicitWh}`);
       if (wi1 >= 0 && d[i][wi1]) combos.add(`${m}||${p}||${d[i][wi1]}`);
@@ -1002,7 +1008,7 @@ function _doFullRebuild(ss) {
   if (master) {
     const d = master.getDataRange().getValues();
     for (let i = 1; i < d.length; i++) {
-      const m = (d[i][0]||'').toString().trim(), p = (d[i][1]||'').toString().trim(), w = (d[i][2]||'').toString().trim();
+      const m = (d[i][0]||'').toString().trim(), p = normalizeProductDisplayName_((d[i][1]||'').toString().trim()), w = (d[i][2]||'').toString().trim();
       if (m && p && w) combos.add(`${m}||${p}||${w}`);
     }
   }
@@ -1077,7 +1083,7 @@ function recomputeMasterMukherjeeNagar(ss, mill, product, cachedAuditMap = null)
     const ti = h.indexOf('bill type') !== -1 ? h.indexOf('bill type') : h.indexOf('type');
 
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       let basePrice = ri >= 0 ? (Number(d[i][ri]) || 0) : 0;
       if (basePrice <= 0 && piFallback >= 0) basePrice = Number(d[i][piFallback]) || 0;
@@ -1120,7 +1126,7 @@ function recomputeMasterMukherjeeNagar(ss, mill, product, cachedAuditMap = null)
     if (ti === -1) ti = h.indexOf('to warehouse');
 
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       if (qty <= 0) continue;
       const entryDate = d[i][0] ? new Date(d[i][0]) : new Date(0);
@@ -1147,7 +1153,7 @@ function recomputeMasterMukherjeeNagar(ss, mill, product, cachedAuditMap = null)
     const mi = h.indexOf('mills') !== -1 ? h.indexOf('mills') : h.indexOf('mill');
     const pi = h.indexOf('product'), qi = h.indexOf('qty');
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       if (qty <= 0) continue;
       const entryDate = d[i][0] ? new Date(d[i][0]) : new Date(0);
@@ -1179,7 +1185,7 @@ function recomputeMasterKheraKalan(ss, mill, product, cachedAuditMap = null) {
     const ti = h.indexOf('bill type') !== -1 ? h.indexOf('bill type') : h.indexOf('type');
 
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       let basePrice = ri >= 0 ? (Number(d[i][ri]) || 0) : 0;
       if (basePrice <= 0 && piFallback >= 0) basePrice = Number(d[i][piFallback]) || 0;
@@ -1222,7 +1228,7 @@ function recomputeMasterKheraKalan(ss, mill, product, cachedAuditMap = null) {
     if (ti === -1) ti = h.indexOf('to warehouse');
 
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       if (qty <= 0) continue;
       const entryDate = d[i][0] ? new Date(d[i][0]) : new Date(0);
@@ -1249,7 +1255,7 @@ function recomputeMasterKheraKalan(ss, mill, product, cachedAuditMap = null) {
     const mi = h.indexOf('mills') !== -1 ? h.indexOf('mills') : h.indexOf('mill');
     const pi = h.indexOf('product'), qi = h.indexOf('qty');
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       if (qty <= 0) continue;
       const entryDate = d[i][0] ? new Date(d[i][0]) : new Date(0);
@@ -1281,7 +1287,7 @@ function recomputeMasterByTruck(ss, mill, product, cachedAuditMap = null) {
     const ti = h.indexOf('bill type') !== -1 ? h.indexOf('bill type') : h.indexOf('type');
 
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       let basePrice = ri >= 0 ? (Number(d[i][ri]) || 0) : 0;
       if (basePrice <= 0 && piFallback >= 0) basePrice = Number(d[i][piFallback]) || 0;
@@ -1324,7 +1330,7 @@ function recomputeMasterByTruck(ss, mill, product, cachedAuditMap = null) {
     if (ti === -1) ti = h.indexOf('to warehouse');
 
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       if (qty <= 0) continue;
       const entryDate = d[i][0] ? new Date(d[i][0]) : new Date(0);
@@ -1346,7 +1352,7 @@ function recomputeMasterByTruck(ss, mill, product, cachedAuditMap = null) {
     const mi = h.indexOf('mills') !== -1 ? h.indexOf('mills') : h.indexOf('mill');
     const pi = h.indexOf('product'), qi = h.indexOf('qty');
     for (let i = 1; i < d.length; i++) {
-      if (!ciEquals(d[i][mi], mill) || !ciEquals(d[i][pi], product)) continue;
+      if (!ciEquals(d[i][mi], mill) || !ciEqualsProduct(d[i][pi], product)) continue;
       const qty = Number(d[i][qi]) || 0;
       if (qty <= 0) continue;
       const entryDate = d[i][0] ? new Date(d[i][0]) : new Date(0);
@@ -2359,7 +2365,9 @@ function getDailyStockLedger(fromDate, toDate, filterWh, filterMill, filterProdu
 
 function findProductRowWithWarehouse(sheet, mill, product, warehouse) {
   const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) { if (ciEquals(data[i][0], mill) && ciEquals(data[i][1], product) && ciEquals(data[i][2], warehouse)) return i + 1; }
+  for (let i = 1; i < data.length; i++) {
+    if (ciEquals(data[i][0], mill) && ciEqualsProduct(data[i][1], product) && ciEquals(data[i][2], warehouse)) return i + 1;
+  }
   return -1;
 }
 
