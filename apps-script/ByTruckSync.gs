@@ -516,8 +516,97 @@ function fixBiltCopierPlainLabels() {
   return { fixedInward: fixedInward, fixedMaster: fixedMaster, fixedSource: fixedSource };
 }
 
+function getByTruckStartRows_() {
+  const props = (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties)
+    ? PropertiesService.getScriptProperties()
+    : null;
+  const pProp = props ? Number(props.getProperty('BY_TRUCK_PURCHASE_START_ROW')) : 0;
+  const sProp = props ? Number(props.getProperty('BY_TRUCK_SALES_START_ROW')) : 0;
+  return {
+    purchaseStartRow: pProp > 0 ? pProp : BY_TRUCK_SYNC_CONFIG.purchaseStartRow,
+    salesStartRow: sProp > 0 ? sProp : BY_TRUCK_SYNC_CONFIG.salesStartRow
+  };
+}
+
+function freezeByTruckSyncToNewRowsOnly() {
+  const books = getByTruckSpreadsheets_();
+  const pSheet = getByTruckSheet_(books.purchaseSource || books.source, BY_TRUCK_SYNC_CONFIG.purchaseSourceSheet);
+  const sSheet = getByTruckSheet_(books.salesSource || books.source, BY_TRUCK_SYNC_CONFIG.salesSourceSheet);
+  
+  const pNext = pSheet.getLastRow() + 1;
+  const sNext = sSheet.getLastRow() + 1;
+  
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('BY_TRUCK_PURCHASE_START_ROW', String(pNext));
+  props.setProperty('BY_TRUCK_SALES_START_ROW', String(sNext));
+  
+  const msg = `✅ By Truck Purana Data Freeze Ho Gaya!\n\n` +
+              `• Purchase Start Row set to: ${pNext}\n` +
+              `• Sales Start Row set to: ${sNext}\n\n` +
+              `Ab 2:00 PM se pehle ka koi bhi purana historical record inward/outward nahi hoga.\n` +
+              `Kewal aage aane wale NAYE records hi sync honge!`;
+  Logger.log(msg);
+  try {
+    SpreadsheetApp.getUi().alert('By Truck Sync Configured', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+  return { status: 'success', purchaseStartRow: pNext, salesStartRow: sNext, message: msg };
+}
+
+function cleanTodaySyncedByTruckRows() {
+  const books = getByTruckSpreadsheets_();
+  const pSheet = books.wms.getSheetByName(BY_TRUCK_SYNC_CONFIG.purchaseTargetSheet);
+  const sSheet = books.wms.getSheetByName(BY_TRUCK_SYNC_CONFIG.salesTargetSheet);
+  
+  let pDeleted = 0, sDeleted = 0;
+  
+  if (pSheet && pSheet.getLastRow() > 1) {
+    const pHeaders = pSheet.getRange(1, 1, 1, pSheet.getLastColumn()).getValues()[0].map(normalizeText_);
+    const pKeyCol = pHeaders.indexOf(normalizeText_(BY_TRUCK_SYNC_CONFIG.sourceKeyHeader));
+    if (pKeyCol >= 0) {
+      const pData = pSheet.getDataRange().getValues();
+      for (let r = pData.length - 1; r >= 1; r--) {
+        const key = cleanText_(pData[r][pKeyCol]);
+        if (key && key.startsWith('purchase:')) {
+          pSheet.deleteRow(r + 1);
+          pDeleted++;
+        }
+      }
+    }
+  }
+  
+  if (sSheet && sSheet.getLastRow() > 1) {
+    const sHeaders = sSheet.getRange(1, 1, 1, sSheet.getLastColumn()).getValues()[0].map(normalizeText_);
+    const sKeyCol = sHeaders.indexOf(normalizeText_(BY_TRUCK_SYNC_CONFIG.sourceKeyHeader));
+    if (sKeyCol >= 0) {
+      const sData = sSheet.getDataRange().getValues();
+      for (let r = sData.length - 1; r >= 1; r--) {
+        const key = cleanText_(sData[r][sKeyCol]);
+        if (key && key.startsWith('sales:')) {
+          sSheet.deleteRow(r + 1);
+          sDeleted++;
+        }
+      }
+    }
+  }
+  
+  if (typeof rebuildByTruckOnly === 'function') {
+    try { rebuildByTruckOnly(); } catch (e) {}
+  }
+  
+  const msg = `✅ Today's Synced Rows Cleaned!\n` +
+              `• PurchaseLog_By Truck: ${pDeleted} automated rows removed\n` +
+              `• SalesLog_By Truck: ${sDeleted} automated rows removed\n\n` +
+              `Manual rows intact hain aur By Truck MasterStock recalculate ho gaya!`;
+  Logger.log(msg);
+  try {
+    SpreadsheetApp.getUi().alert('Clean Synced By Truck Rows', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+  return { status: 'success', pDeleted, sDeleted, message: msg };
+}
+
 function buildByTruckPurchases_(sourceRows, weights, millMap) {
-  const start = BY_TRUCK_SYNC_CONFIG.purchaseStartRow - 1;
+  const startRows = getByTruckStartRows_();
+  const start = startRows.purchaseStartRow - 1;
   const columns = BY_TRUCK_SYNC_CONFIG.purchaseSourceColumns;
   const rows = [];
   const totalsByPo = {};
@@ -647,7 +736,8 @@ function getByTruckPurchaseCosts_(purchaseSheet, weights) {
 }
 
 function buildByTruckSales_(sourceRows, weights, costs, millMap) {
-  const start = BY_TRUCK_SYNC_CONFIG.salesStartRow - 1;
+  const startRows = getByTruckStartRows_();
+  const start = startRows.salesStartRow - 1;
   const columns = BY_TRUCK_SYNC_CONFIG.salesSourceColumns;
   const sales = [];
   for (let i = start; i < sourceRows.length; i++) {
