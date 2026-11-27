@@ -174,6 +174,7 @@ function onOpen() {
       .addItem('🛠️ Fix Freight & Profit in Khera Sales (Rows 1939-1947+)', 'fixKheraKalanSalesFreightAndProfit')
       .addItem('🔄 Fix BILT Plain ➔ White (All Warehouses & Logs)', 'fixAllBiltPlainToWhite')
       .addItem('🗑️ Delete Khera Kalan Duplicate Rows 263-264 & Rebuild', 'deleteKheraKalanDuplicateRows263_264')
+      .addItem('🗑️ Delete Khera Kalan Duplicate Sales (Rows 2110-2113)', 'deleteKheraKalanSalesDuplicateRows')
       .addSeparator()
       .addItem('📍 Rebuild Mukherjee Nagar Only', 'rebuildMukherjeeNagarOnly')
       .addItem('📍 Rebuild Khera Kalan Only', 'rebuildKheraKalanOnly')
@@ -366,6 +367,50 @@ function deleteKheraKalanDuplicateRows263_264() {
   Logger.log(msg);
   try {
     SpreadsheetApp.getUi().alert('Duplicate Rows Deleted', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+
+  return { status: 'success', deletedCount, newLastRow: sheet.getLastRow(), message: msg };
+}
+
+/**
+ * Deletes duplicate sales rows 2110-2113 in SalesLog_Khera Kalan
+ * (FRIENDS DOCUMENT CENTRE, GOEL PAPER MART, Aggarwal Sales)
+ * and rebuilds Khera Kalan MasterStock.
+ */
+function deleteKheraKalanSalesDuplicateRows() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('SalesLog_Khera Kalan');
+  if (!sheet) return { status: 'error', message: 'SalesLog_Khera Kalan sheet nahi mila' };
+
+  try {
+    const filter = sheet.getFilter();
+    if (filter) filter.remove();
+  } catch (e) {}
+
+  const lastRow = sheet.getLastRow();
+  let deletedCount = 0;
+
+  for (let r = lastRow; r >= Math.max(2, lastRow - 15); r--) {
+    const prod = String(sheet.getRange(r, 7).getValue() || '').trim(); // Column G is Product
+    const party = String(sheet.getRange(r, 5).getValue() || '').trim(); // Column E is Party
+    if (/copier\s*plain/i.test(prod) && (/friends document|goel paper|aggarwal sales/i.test(party))) {
+      sheet.deleteRow(r);
+      deletedCount++;
+    }
+  }
+
+  try {
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty('lastRow_SalesLog_Khera Kalan', String(sheet.getLastRow()));
+  } catch (e) {}
+
+  rebuildKheraKalanOnly();
+
+  const msg = `✅ SalesLog_Khera Kalan se ${deletedCount} duplicate rows delete ho gayi hain!\n` +
+              `Khera Kalan MasterStock update ho gaya hai!`;
+  Logger.log(msg);
+  try {
+    SpreadsheetApp.getUi().alert('Duplicate Sales Rows Deleted', msg, SpreadsheetApp.getUi().ButtonSet.OK);
   } catch (e) {}
 
   return { status: 'success', deletedCount, newLastRow: sheet.getLastRow(), message: msg };
