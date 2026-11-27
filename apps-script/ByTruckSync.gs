@@ -400,7 +400,7 @@ function getMillForProduct_(product, millMap) {
   return firstWord || '';
 }
 
-const PRODUCT_NAME_ALIASES = {
+var PRODUCT_NAME_ALIASES = typeof PRODUCT_NAME_ALIASES !== 'undefined' ? PRODUCT_NAME_ALIASES : {
   'biltcopierplaina475gsm': 'BILT WHITE COPIER A4 75 GSM',
   'biltcopierplaina470gsm': 'BILT WHITE COPIER A4 70 GSM',
   'biltcopierplaina480gsm': 'BILT WHITE COPIER A4 80 GSM',
