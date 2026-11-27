@@ -400,24 +400,23 @@ function getMillForProduct_(product, millMap) {
   return firstWord || '';
 }
 
-var PRODUCT_NAME_ALIASES = typeof PRODUCT_NAME_ALIASES !== 'undefined' ? PRODUCT_NAME_ALIASES : {
-  'biltcopierplaina475gsm': 'BILT WHITE COPIER A4 75 GSM',
-  'biltcopierplaina470gsm': 'BILT WHITE COPIER A4 70 GSM',
-  'biltcopierplaina480gsm': 'BILT WHITE COPIER A4 80 GSM',
-  'biltcopierplaina375gsm': 'BILT WHITE COPIER A3 75 GSM',
-  'biltcopierplaina370gsm': 'BILT WHITE COPIER A3 70 GSM',
-  'biltplaincopiera475gsm': 'BILT WHITE COPIER A4 75 GSM',
-  'biltplaincopiera470gsm': 'BILT WHITE COPIER A4 70 GSM',
-  'biltwhitecopierplaina475gsm': 'BILT WHITE COPIER A4 75 GSM',
-  'biltwhitecopierplaina470gsm': 'BILT WHITE COPIER A4 70 GSM'
-};
-
 function normalizeProductDisplayName_(productName) {
   if (!productName) return '';
   const raw = cleanText_(productName);
   const norm = normalizeText_(raw);
-  if (PRODUCT_NAME_ALIASES[norm]) {
-    return PRODUCT_NAME_ALIASES[norm];
+  const aliases = {
+    'biltcopierplaina475gsm': 'BILT WHITE COPIER A4 75 GSM',
+    'biltcopierplaina470gsm': 'BILT WHITE COPIER A4 70 GSM',
+    'biltcopierplaina480gsm': 'BILT WHITE COPIER A4 80 GSM',
+    'biltcopierplaina375gsm': 'BILT WHITE COPIER A3 75 GSM',
+    'biltcopierplaina370gsm': 'BILT WHITE COPIER A3 70 GSM',
+    'biltplaincopiera475gsm': 'BILT WHITE COPIER A4 75 GSM',
+    'biltplaincopiera470gsm': 'BILT WHITE COPIER A4 70 GSM',
+    'biltwhitecopierplaina475gsm': 'BILT WHITE COPIER A4 75 GSM',
+    'biltwhitecopierplaina470gsm': 'BILT WHITE COPIER A4 70 GSM'
+  };
+  if (aliases[norm]) {
+    return aliases[norm];
   }
   if (/^bilt/i.test(raw) && /copier\s*plain|plain\s*copier/i.test(raw)) {
     return raw.replace(/copier\s*plain/i, 'WHITE COPIER').replace(/plain\s*copier/i, 'WHITE COPIER');
