@@ -173,6 +173,7 @@ function onOpen() {
       .addItem('⚡ Quick Reset 0-Stock Prices (Instant)', 'resetZeroStockPrices')
       .addItem('🛠️ Fix Freight & Profit in Khera Sales (Rows 1939-1947+)', 'fixKheraKalanSalesFreightAndProfit')
       .addItem('🔄 Fix BILT Plain ➔ White (All Warehouses & Logs)', 'fixAllBiltPlainToWhite')
+      .addItem('🗑️ Delete Khera Kalan Duplicate Rows 263-264 & Rebuild', 'deleteKheraKalanDuplicateRows263_264')
       .addSeparator()
       .addItem('📍 Rebuild Mukherjee Nagar Only', 'rebuildMukherjeeNagarOnly')
       .addItem('📍 Rebuild Khera Kalan Only', 'rebuildKheraKalanOnly')
@@ -319,6 +320,55 @@ function RESTORE_PRE_2PM_STOCK_AND_CLEANUP() {
   } catch (e) {}
 
   return { status: 'success', pDeleted, sDeleted, triggersStopped: triggerCount, message: msg };
+}
+
+/**
+ * Deletes duplicate rows 263 and 264 in PurchaseLog_Khera Kalan,
+ * clears any filter so rows are deleted accurately,
+ * and rebuilds Khera Kalan MasterStock.
+ */
+function deleteKheraKalanDuplicateRows263_264() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('PurchaseLog_Khera Kalan');
+  if (!sheet) return { status: 'error', message: 'PurchaseLog_Khera Kalan sheet nahi mila' };
+
+  // Filter clear karein taaki galat hidden row delete na ho
+  try {
+    const filter = sheet.getFilter();
+    if (filter) filter.remove();
+  } catch (e) {}
+
+  let deletedCount = 0;
+  const lastRow = sheet.getLastRow();
+
+  // Bottom-up delete
+  if (lastRow >= 264) {
+    sheet.deleteRow(264);
+    deletedCount++;
+  }
+  if (sheet.getLastRow() >= 263) {
+    sheet.deleteRow(263);
+    deletedCount++;
+  }
+
+  // Update tracked last row bookmark
+  try {
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty('lastRow_PurchaseLog_Khera Kalan', String(sheet.getLastRow()));
+  } catch (e) {}
+
+  // MasterStock me Khera Kalan recompute karein
+  rebuildKheraKalanOnly();
+
+  const msg = `✅ PurchaseLog_Khera Kalan se Duplicate Rows 263 & 264 delete ho gayi hain!\n` +
+              `Total rows deleted: ${deletedCount}\n` +
+              `Khera Kalan MasterStock (BILT White Copier) update ho gaya hai!`;
+  Logger.log(msg);
+  try {
+    SpreadsheetApp.getUi().alert('Duplicate Rows Deleted', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+
+  return { status: 'success', deletedCount, newLastRow: sheet.getLastRow(), message: msg };
 }
 
 function resetZeroStockPrices() {
