@@ -190,9 +190,14 @@ function RESTORE_PRE_2PM_STOCK_AND_CLEANUP() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) return { status: 'error', message: 'Spreadsheet open nahi ho saki' };
 
-  // 1. Sabhi background triggers delete karein
+  // 1. Sabhi background triggers delete karein aur By Truck sync ko pause karein
   let triggerCount = 0;
   try {
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty('BY_TRUCK_SYNC_PAUSED', 'true');
+    props.deleteProperty('SYNC_IN_PROGRESS');
+    props.deleteProperty('SYNC_START_TIME');
+
     const triggers = ScriptApp.getProjectTriggers();
     triggerCount = triggers.length;
     triggers.forEach(t => {

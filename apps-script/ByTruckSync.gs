@@ -55,6 +55,14 @@ const BY_TRUCK_SYNC_CONFIG = {
 };
 
 function syncByTruckData() {
+  const props = (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties)
+    ? PropertiesService.getScriptProperties()
+    : null;
+  if (props && props.getProperty('BY_TRUCK_SYNC_PAUSED') === 'true') {
+    Logger.log('[syncByTruckData] Sync is PAUSED by user. Exiting safely without modifying sheets.');
+    return;
+  }
+
   let lock = null;
   if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
     lock = LockService.getScriptLock();
@@ -807,6 +815,10 @@ function buildByTruckSales_(sourceRows, weights, costs, millMap) {
 }
 
 function upsertByTruckRows_(sheet, records, kind) {
+  if (!records || records.length === 0) {
+    Logger.log('[upsertByTruckRows_] No records to upsert for ' + kind);
+    return;
+  }
   const lastColumn = sheet.getLastColumn();
   if (lastColumn < 1) throw new Error('Target sheet has no header row: ' + sheet.getName());
   const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
