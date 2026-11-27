@@ -515,3 +515,61 @@ test('preserves manually entered freight in PurchaseLog_By Truck when source has
   const expectedNetBuy = (pSheet.data[1][pHeaders.indexOf('Amount')] + 500) / pSheet.data[1][pHeaders.indexOf('Qty')];
   assert.equal(pSheet.data[1][netBuyCol], expectedNetBuy);
 });
+
+test('normalizes BILT COPIER PLAIN to BILT WHITE COPIER and matches sales cost across aliases', () => {
+  const { context, source, wms } = createHarness();
+  const purchaseSource = source.getSheetByName('Orders (Readable)');
+  const salesSource = source.getSheetByName('Workflow');
+  const pSheet = wms.getSheetByName('PurchaseLog_By Truck');
+  const sSheet = wms.getSheetByName('SalesLog_By Truck');
+
+  // Purchase entry entered as BILT COPIER PLAIN A4 75 GSM
+  const pRow = sourcePurchase('PO-147', 10, 234, 0, 0, 'yes', '26/10/2026');
+  pRow[3] = 'BILT COPIER PLAIN A4 75 GSM';
+  appendSource(purchaseSource, pRow);
+
+  // Sales entry entered as BILT WHITE COPIER A4 75 GSM
+  const sRow = sourceSale('PO-147', 'BILL-147', 100, 15, '26/10/2026');
+  sRow[56] = 'BILT WHITE COPIER A4 75 GSM';
+  appendSource(salesSource, sRow);
+
+  context.syncByTruckData();
+
+  const pHeaders = pSheet.data[0];
+  const sHeaders = sSheet.data[0];
+
+  // Inward product should be normalized to BILT WHITE COPIER A4 75 GSM
+  assert.equal(pSheet.data[1][pHeaders.indexOf('Product')], 'BILT WHITE COPIER A4 75 GSM');
+  assert.equal(pSheet.data[1][pHeaders.indexOf('Mill')], 'BILT');
+
+  // Sales product should be BILT WHITE COPIER A4 75 GSM
+  assert.equal(sSheet.data[1][sHeaders.indexOf('Product')], 'BILT WHITE COPIER A4 75 GSM');
+  assert.equal(sSheet.data[1][sHeaders.indexOf('Mills')], 'BILT');
+
+  // Sales Cost should match the inward purchase net rate (10/kg), not fall back to rate (15/kg)
+  const costPrice = sSheet.data[1][sHeaders.indexOf('Cost Price')];
+  const saleRate = sSheet.data[1][sHeaders.indexOf('Rate')];
+  const profit = sSheet.data[1][sHeaders.indexOf('Profit')];
+
+  assert.ok(costPrice < saleRate, `Cost Price ${costPrice} should be lower than Sale Rate ${saleRate}`);
+  assert.ok(profit > 0, `Profit ${profit} should be greater than 0`);
+});
+
+test('fixBiltCopierPlainLabels migrates existing rows in PurchaseLog_By Truck', () => {
+  const { context, wms } = createHarness();
+  const pSheet = wms.getSheetByName('PurchaseLog_By Truck');
+  const pHeaders = pSheet.data[0];
+
+  // Pre-existing row with BILT COPIER PLAIN A4 75 GSM in PurchaseLog
+  const row = paddedRow(pHeaders.length, {
+    [pHeaders.indexOf('Product')]: 'BILT COPIER PLAIN A4 75 GSM',
+    [pHeaders.indexOf('PO No')]: '147',
+    [pHeaders.indexOf('Mill')]: 'BILT'
+  });
+  pSheet.data.push(row);
+
+  const result = context.fixBiltCopierPlainLabels();
+  assert.equal(result.fixedInward, 1);
+  assert.equal(pSheet.data[1][pHeaders.indexOf('Product')], 'BILT WHITE COPIER A4 75 GSM');
+});
+

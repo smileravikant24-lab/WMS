@@ -64,6 +64,11 @@ function syncByTruckData() {
     }
   }
   try {
+    try {
+      fixBiltCopierPlainLabels();
+    } catch (e) {
+      Logger.log('fixBiltCopierPlainLabels notice: ' + e.message);
+    }
     syncByTruckPurchases_();
     syncByTruckSales_();
     try {
@@ -395,6 +400,116 @@ function getMillForProduct_(product, millMap) {
   return firstWord || '';
 }
 
+const PRODUCT_NAME_ALIASES = {
+  'biltcopierplaina475gsm': 'BILT WHITE COPIER A4 75 GSM',
+  'biltcopierplaina470gsm': 'BILT WHITE COPIER A4 70 GSM',
+  'biltcopierplaina480gsm': 'BILT WHITE COPIER A4 80 GSM',
+  'biltcopierplaina375gsm': 'BILT WHITE COPIER A3 75 GSM',
+  'biltcopierplaina370gsm': 'BILT WHITE COPIER A3 70 GSM',
+  'biltplaincopiera475gsm': 'BILT WHITE COPIER A4 75 GSM',
+  'biltplaincopiera470gsm': 'BILT WHITE COPIER A4 70 GSM',
+  'biltwhitecopierplaina475gsm': 'BILT WHITE COPIER A4 75 GSM',
+  'biltwhitecopierplaina470gsm': 'BILT WHITE COPIER A4 70 GSM'
+};
+
+function normalizeProductDisplayName_(productName) {
+  if (!productName) return '';
+  const raw = cleanText_(productName);
+  const norm = normalizeText_(raw);
+  if (PRODUCT_NAME_ALIASES[norm]) {
+    return PRODUCT_NAME_ALIASES[norm];
+  }
+  if (/^bilt/i.test(raw) && /copier\s*plain|plain\s*copier/i.test(raw)) {
+    return raw.replace(/copier\s*plain/i, 'WHITE COPIER').replace(/plain\s*copier/i, 'WHITE COPIER');
+  }
+  return raw;
+}
+
+function fixBiltCopierPlainLabels() {
+  const books = getByTruckSpreadsheets_();
+  let fixedInward = 0;
+  let fixedMaster = 0;
+  let fixedSource = 0;
+
+  // 1. Fix PurchaseLog_By Truck in WMS
+  try {
+    const pSheet = books.wms.getSheetByName(BY_TRUCK_SYNC_CONFIG.purchaseTargetSheet);
+    if (pSheet && pSheet.getLastRow() > 1) {
+      const pHeaders = pSheet.getRange(1, 1, 1, pSheet.getLastColumn()).getValues()[0].map(normalizeText_);
+      const pProdCol = pHeaders.indexOf('product');
+      if (pProdCol >= 0) {
+        const pRange = pSheet.getRange(2, pProdCol + 1, pSheet.getLastRow() - 1, 1);
+        const pValues = pRange.getValues();
+        let changed = false;
+        for (let r = 0; r < pValues.length; r++) {
+          const currentProd = cleanText_(pValues[r][0]);
+          const normalized = normalizeProductDisplayName_(currentProd);
+          if (normalized !== currentProd) {
+            pValues[r][0] = normalized;
+            fixedInward++;
+            changed = true;
+          }
+        }
+        if (changed) {
+          pRange.setValues(pValues);
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log('fixBiltCopierPlainLabels purchase target notice: ' + e.message);
+  }
+
+  // 2. Fix MasterStock in WMS (delete stale 'BILT COPIER PLAIN' rows)
+  try {
+    const mSheet = books.wms.getSheetByName('MasterStock');
+    if (mSheet && mSheet.getLastRow() > 1) {
+      const mData = mSheet.getDataRange().getValues();
+      for (let r = mData.length - 1; r >= 1; r--) {
+        const prod = cleanText_(mData[r][1]);
+        const wh = cleanText_(mData[r][2]);
+        if (normalizeText_(wh) === 'bytruck' && /copier\s*plain|plain\s*copier/i.test(prod)) {
+          if (typeof mSheet.deleteRow === 'function') {
+            mSheet.deleteRow(r + 1);
+            fixedMaster++;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log('fixBiltCopierPlainLabels master notice: ' + e.message);
+  }
+
+  // 3. Fix Orders (Readable) in Purchase Source Sheet if accessible
+  try {
+    const srcSheet = books.purchaseSource ? books.purchaseSource.getSheetByName(BY_TRUCK_SYNC_CONFIG.purchaseSourceSheet) : null;
+    if (srcSheet && srcSheet.getLastRow() >= BY_TRUCK_SYNC_CONFIG.purchaseStartRow) {
+      const pCol = BY_TRUCK_SYNC_CONFIG.purchaseSourceColumns.product;
+      const numRows = srcSheet.getLastRow() - BY_TRUCK_SYNC_CONFIG.purchaseStartRow + 1;
+      const sRange = srcSheet.getRange(BY_TRUCK_SYNC_CONFIG.purchaseStartRow, pCol + 1, numRows, 1);
+      const sValues = sRange.getValues();
+      let sChanged = false;
+      for (let r = 0; r < sValues.length; r++) {
+        const prodVal = cleanText_(sValues[r][0]);
+        if (/copier\s*plain|plain\s*copier/i.test(prodVal)) {
+          const norm = normalizeProductDisplayName_(prodVal);
+          if (norm !== prodVal) {
+            sValues[r][0] = norm;
+            fixedSource++;
+            sChanged = true;
+          }
+        }
+      }
+      if (sChanged) {
+        sRange.setValues(sValues);
+      }
+    }
+  } catch (e) {
+    Logger.log('fixBiltCopierPlainLabels purchase source notice: ' + e.message);
+  }
+
+  return { fixedInward: fixedInward, fixedMaster: fixedMaster, fixedSource: fixedSource };
+}
+
 function buildByTruckPurchases_(sourceRows, weights, millMap) {
   const start = BY_TRUCK_SYNC_CONFIG.purchaseStartRow - 1;
   const columns = BY_TRUCK_SYNC_CONFIG.purchaseSourceColumns;
@@ -404,7 +519,7 @@ function buildByTruckPurchases_(sourceRows, weights, millMap) {
   for (let i = start; i < sourceRows.length; i++) {
     const row = sourceRows[i];
     const po = cleanText_(row[columns.po]);
-    const product = cleanText_(row[columns.product]);
+    const product = normalizeProductDisplayName_(cleanText_(row[columns.product]));
     const qtyKg = toNumber_(row[columns.qtyKg]);
     const invoiceDate = parseIndianInvoiceDate_(row[columns.date]);
     if (
@@ -494,9 +609,11 @@ function getByTruckPurchaseCosts_(purchaseSheet, weights) {
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     const po = cleanText_(row[columns.po]);
-    const product = normalizeText_(row[columns.product]);
+    const rawProd = cleanText_(row[columns.product]);
+    const normalizedProd = normalizeProductDisplayName_(rawProd);
+    const product = normalizeText_(normalizedProd);
     if (!po || !product) continue;
-    const weight = getProductWeight_(weights, row[columns.product]);
+    const weight = getProductWeight_(weights, normalizedProd);
     const qtyReam = toNumber_(row[columns.qtyReam]);
     const qtyKg = qtyReam * weight;
     let netPerKg = columns.netBuyPerKg >= 0 ? toNumber_(row[columns.netBuyPerKg]) : 0;
@@ -531,7 +648,7 @@ function buildByTruckSales_(sourceRows, weights, costs, millMap) {
     const row = sourceRows[i];
     const po = cleanText_(row[columns.po]);
     const billNo = cleanText_(row[columns.billNo]);
-    const product = cleanText_(row[columns.product]);
+    const product = normalizeProductDisplayName_(cleanText_(row[columns.product]));
     const qtyReam = toNumber_(row[columns.qtyReam]);
     const salesDate = parseIndianInvoiceDate_(row[columns.date]);
     if (!po || !billNo || !product || qtyReam <= 0 || !salesDate) continue;
@@ -542,7 +659,21 @@ function buildByTruckSales_(sourceRows, weights, costs, millMap) {
     const amount = roundMoney_(qtyReam * ratePerReam);
     let costPerKg = costs[normalizeKey_([po, product])];
     if (costPerKg === undefined || isNaN(costPerKg)) {
-      // Fallback: If no purchase cost found for this PO yet, do not throw fatal error
+      // Smart fallback 1: Check if PO has a purchase with matching normalized alias or GSM
+      const poPrefix = normalizeText_(po) + '|';
+      const poMatches = Object.keys(costs).filter(function (k) { return k.indexOf(poPrefix) === 0; });
+      if (poMatches.length === 1) {
+        costPerKg = costs[poMatches[0]];
+      } else if (poMatches.length > 1) {
+        const gsmMatch = normalizeText_(product).match(/\d{2,3}gsm/);
+        if (gsmMatch) {
+          const found = poMatches.find(function (k) { return k.indexOf(gsmMatch[0]) !== -1; });
+          if (found) costPerKg = costs[found];
+        }
+      }
+    }
+    if (costPerKg === undefined || isNaN(costPerKg)) {
+      Logger.log('⚠️ [ByTruckSync Warning] No purchase cost found for PO: ' + po + ', Product: ' + product);
       costPerKg = ratePerKg > 0 ? ratePerKg : 0;
     }
     const costPerReam = costPerKg * weight;
