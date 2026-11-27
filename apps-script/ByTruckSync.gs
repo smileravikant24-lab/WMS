@@ -72,6 +72,13 @@ function syncByTruckData() {
     syncByTruckPurchases_();
     syncByTruckSales_();
     try {
+      const books = getByTruckSpreadsheets_();
+      dedupeByTruckSheet_(books.wms.getSheetByName(BY_TRUCK_SYNC_CONFIG.purchaseTargetSheet), 'purchase');
+      dedupeByTruckSheet_(books.wms.getSheetByName(BY_TRUCK_SYNC_CONFIG.salesTargetSheet), 'sales');
+    } catch (e) {
+      Logger.log('dedupe notice: ' + e.message);
+    }
+    try {
       if (typeof rebuildByTruckOnly === 'function') {
         rebuildByTruckOnly();
       }
@@ -788,12 +795,25 @@ function upsertByTruckRows_(sheet, records, kind) {
   let nextRow = Math.max(sheet.getLastRow() + 1, 2);
   const updates = [];
   records.forEach(function (record) {
-    const naturalKey = normalizeKey_(record.naturalKey);
+    const cleanPo = cleanText_(record.values.po).replace(/^po[\s\-_]*/i, '');
+    const naturalKey = normalizeKey_(
+      kind === 'sales'
+        ? [cleanPo, cleanText_(record.values.billNo), record.values.product]
+        : [cleanPo, record.values.product]
+    );
     let targetRow = exactRows[record.sourceKey];
     if (!targetRow && naturalRows[naturalKey]) {
       targetRow = naturalRows[naturalKey].find(function (candidate) {
         return !claimedRows[candidate];
       });
+    }
+    if (!targetRow && kind === 'sales' && record.values.billNo) {
+      const billKey = normalizeKey_(['bill', cleanText_(record.values.billNo), record.values.product]);
+      if (naturalRows[billKey]) {
+        targetRow = naturalRows[billKey].find(function (candidate) {
+          return !claimedRows[candidate];
+        });
+      }
     }
     if (!targetRow) targetRow = nextRow++;
     claimedRows[targetRow] = true;
@@ -915,13 +935,25 @@ function upsertByTruckRows_(sheet, records, kind) {
 }
 
 function getNaturalTargetKey_(row, columns, kind) {
-  const po = cleanText_(row[columns.po]);
-  const product = cleanText_(row[columns.product]);
-  if (!po || !product) return '';
-  const parts = kind === 'sales'
-    ? [po, cleanText_(row[columns.billNo]), product]
-    : [po, product];
-  return normalizeKey_(parts);
+  const poRaw = cleanText_(row[columns.po]);
+  const po = poRaw.replace(/^po[\s\-_]*/i, '');
+  const rawProduct = cleanText_(row[columns.product]);
+  const product = normalizeProductDisplayName_(rawProduct);
+  if (!product) return '';
+
+  if (kind === 'sales') {
+    const billNo = cleanText_(row[columns.billNo]);
+    if (po && billNo) {
+      return normalizeKey_([po, billNo, product]);
+    }
+    if (billNo) {
+      return normalizeKey_(['bill', billNo, product]);
+    }
+    return '';
+  }
+
+  if (!po) return '';
+  return normalizeKey_([po, product]);
 }
 
 function findHeaderColumn_(headers, aliases) {
@@ -1030,4 +1062,52 @@ function sumUniqueValues_(values) {
   return Object.keys(values).reduce(function (total, key) {
     return total + values[key];
   }, 0);
+}
+
+function dedupeByTruckSheet_(sheet, kind) {
+  if (!sheet || sheet.getLastRow() <= 1) return 0;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const normalizedHeaders = headers.map(normalizeText_);
+  const keyColumn = findHeaderColumn_(headers, [BY_TRUCK_SYNC_CONFIG.sourceKeyHeader]);
+  const prCol = normalizedHeaders.indexOf('product');
+  const poCol = findHeaderColumn_(normalizedHeaders, ['pono', 'ponumber', 'po']);
+  const billCol = kind === 'sales' ? findHeaderColumn_(normalizedHeaders, ['billno', 'billnumber', 'invoiceno']) : -1;
+  const qtyCol = normalizedHeaders.indexOf('qty');
+  if (qtyCol < 0 || prCol < 0) return 0;
+
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues();
+  const seen = {};
+  const toDelete = [];
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const rowNum = i + 2;
+    const prod = normalizeProductDisplayName_(row[prCol]);
+    const qty = toNumber_(row[qtyCol]);
+    const po = poCol >= 0 ? cleanText_(row[poCol]).replace(/^po[\s\-_]*/i, '') : '';
+    const bill = billCol >= 0 ? cleanText_(row[billCol]) : '';
+    const sig = kind === 'sales'
+      ? (bill ? `${bill}||${prod}||${qty}` : `${po}||${prod}||${qty}`)
+      : `${po}||${prod}||${qty}`;
+    const hasKey = keyColumn >= 0 && Boolean(cleanText_(row[keyColumn]));
+
+    if (seen[sig]) {
+      if (!seen[sig].hasKey && hasKey) {
+        toDelete.push(seen[sig].row);
+        seen[sig] = { row: rowNum, hasKey: true };
+      } else {
+        toDelete.push(rowNum);
+      }
+    } else {
+      seen[sig] = { row: rowNum, hasKey: hasKey };
+    }
+  }
+
+  toDelete.sort(function(a, b) { return b - a; }).forEach(function(r) {
+    if (typeof sheet.deleteRow === 'function') {
+      sheet.deleteRow(r);
+    }
+  });
+
+  return toDelete.length;
 }

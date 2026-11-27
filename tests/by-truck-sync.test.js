@@ -72,6 +72,10 @@ class FakeSheet {
     return new FakeRange(this, row, column, rowCount, columnCount);
   }
 
+  deleteRow(rowIndex) {
+    this.data.splice(rowIndex - 1, 1);
+  }
+
   hideColumns() {}
 }
 
@@ -571,5 +575,29 @@ test('fixBiltCopierPlainLabels migrates existing rows in PurchaseLog_By Truck', 
   const result = context.fixBiltCopierPlainLabels();
   assert.equal(result.fixedInward, 1);
   assert.equal(pSheet.data[1][pHeaders.indexOf('Product')], 'BILT WHITE COPIER A4 75 GSM');
+});
+
+test('dedupeByTruckSheet_ removes duplicate rows when sales or purchase repeat', () => {
+  const { context, wms } = createHarness();
+  const pSheet = wms.getSheetByName('PurchaseLog_By Truck');
+  const pHeaders = pSheet.data[0];
+
+  // Add duplicate purchase rows for PO 147
+  const row1 = paddedRow(pHeaders.length, {
+    [pHeaders.indexOf('Product')]: 'BILT WHITE COPIER A4 75 GSM',
+    [pHeaders.indexOf('PO No')]: '147',
+    [pHeaders.indexOf('Qty')]: 100
+  });
+  const row2 = paddedRow(pHeaders.length, {
+    [pHeaders.indexOf('Product')]: 'BILT WHITE COPIER A4 75 GSM',
+    [pHeaders.indexOf('PO No')]: '147',
+    [pHeaders.indexOf('Qty')]: 100
+  });
+  pSheet.data.push(row1, row2);
+  assert.equal(pSheet.getLastRow(), 3);
+
+  const deleted = context.dedupeByTruckSheet_(pSheet, 'purchase');
+  assert.equal(deleted, 1);
+  assert.equal(pSheet.getLastRow(), 2);
 });
 
