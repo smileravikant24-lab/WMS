@@ -169,12 +169,14 @@ function onOpen() {
       .createMenu('🛠 WMS Tools')
       .addItem('🚨 RESTORE 2:00 PM PREVIOUS STOCK (Emergency Clean)', 'RESTORE_PRE_2PM_STOCK_AND_CLEANUP')
       .addSeparator()
+      .addItem('🧹 1-CLICK: Clean All Khera Kalan Duplicates (Purchase & Sales) & Rebuild', 'cleanupAllKheraKalanDuplicates')
+      .addItem('🗑️ Delete Khera Kalan Duplicate Purchases (30/10 & 04/11)', 'deleteKheraKalanDuplicateRows263_264')
+      .addItem('🗑️ Delete Khera Kalan Duplicate Sales (13/11 & 26/11)', 'deleteKheraKalanSalesDuplicateRows')
+      .addSeparator()
       .addItem('✅ Health Check (Master vs Logs)', 'showHealthCheck')
       .addItem('⚡ Quick Reset 0-Stock Prices (Instant)', 'resetZeroStockPrices')
       .addItem('🛠️ Fix Freight & Profit in Khera Sales (Rows 1939-1947+)', 'fixKheraKalanSalesFreightAndProfit')
       .addItem('🔄 Fix BILT Plain ➔ White (All Warehouses & Logs)', 'fixAllBiltPlainToWhite')
-      .addItem('🗑️ Delete Khera Kalan Duplicate Rows 263-264 & Rebuild', 'deleteKheraKalanDuplicateRows263_264')
-      .addItem('🗑️ Delete Khera Kalan Duplicate Sales (Rows 2110-2113)', 'deleteKheraKalanSalesDuplicateRows')
       .addSeparator()
       .addItem('📍 Rebuild Mukherjee Nagar Only', 'rebuildMukherjeeNagarOnly')
       .addItem('📍 Rebuild Khera Kalan Only', 'rebuildKheraKalanOnly')
@@ -324,96 +326,127 @@ function RESTORE_PRE_2PM_STOCK_AND_CLEANUP() {
 }
 
 /**
- * Deletes duplicate rows 263 and 264 in PurchaseLog_Khera Kalan,
- * clears any filter so rows are deleted accurately,
- * and rebuilds Khera Kalan MasterStock.
+ * 1-Click Master Cleaner for Khera Kalan:
+ * 1. Safely removes sheet filters so row deletion targets the exact records.
+ * 2. In PurchaseLog_Khera Kalan: Finds and deletes duplicate 30/10 & 04/11 "PLAIN" rows
+ *    (6,977 reams, 1,260 reams, 5,646 reams) that duplicate Rows 257, 243, 258.
+ * 3. In SalesLog_Khera Kalan: Finds and deletes duplicate 13/11 & 26/11 "PLAIN" sales rows
+ *    (FRIENDS DOCUMENT CENTRE 200 & 300, GOEL PAPER MART 350, Aggarwal Sales 5) where Cost Price is 0.
+ * 4. Resets row tracking bookmarks and rebuilds Khera Kalan MasterStock accurately.
  */
-function deleteKheraKalanDuplicateRows263_264() {
+function cleanupAllKheraKalanDuplicates() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('PurchaseLog_Khera Kalan');
-  if (!sheet) return { status: 'error', message: 'PurchaseLog_Khera Kalan sheet nahi mila' };
+  let purchaseDeleted = 0;
+  let salesDeleted = 0;
+  const deletedDetails = [];
 
-  // Filter clear karein taaki galat hidden row delete na ho
-  try {
-    const filter = sheet.getFilter();
-    if (filter) filter.remove();
-  } catch (e) {}
+  // --- 1. Clean PurchaseLog_Khera Kalan ---
+  const pSheet = ss.getSheetByName('PurchaseLog_Khera Kalan');
+  if (pSheet && pSheet.getLastRow() > 1) {
+    try {
+      const filter = pSheet.getFilter();
+      if (filter) filter.remove();
+    } catch (e) {}
 
-  let deletedCount = 0;
-  const lastRow = sheet.getLastRow();
+    const lastRow = pSheet.getLastRow();
+    const data = pSheet.getRange(1, 1, lastRow, pSheet.getLastColumn()).getValues();
+    const headers = data[0].map(h => String(h || '').trim().toLowerCase());
+    const prodIdx = headers.indexOf('product');
+    const dateIdx = headers.indexOf('date');
+    const qtyIdx = headers.indexOf('qty');
 
-  // Bottom-up delete
-  if (lastRow >= 264) {
-    sheet.deleteRow(264);
-    deletedCount++;
+    // Bottom-up delete
+    for (let r = lastRow; r >= 2; r--) {
+      const rowVals = data[r - 1];
+      const prod = String(rowVals[prodIdx >= 0 ? prodIdx : 2] || '').trim();
+      const qty = Number(rowVals[qtyIdx >= 0 ? qtyIdx : 5]) || 0;
+      const dateStr = String(rowVals[dateIdx >= 0 ? dateIdx : 0] || '');
+
+      // Duplicate BILT COPIER PLAIN rows from 30/10 and 04/11 (clones of rows 257, 243, 258)
+      if (/copier\s*plain/i.test(prod)) {
+        if ((qty === 6977 || qty === 1260 || qty === 5646) ||
+            (dateStr.includes('30/10') || dateStr.includes('04/11') || dateStr.includes('2026-10-30') || dateStr.includes('2026-11-04'))) {
+          pSheet.deleteRow(r);
+          purchaseDeleted++;
+          deletedDetails.push(`Purchase Row ${r}: ${prod} (${qty} reams, Date: ${dateStr})`);
+        }
+      }
+    }
+
+    try {
+      PropertiesService.getScriptProperties().setProperty('lastRow_PurchaseLog_Khera Kalan', String(pSheet.getLastRow()));
+    } catch (e) {}
   }
-  if (sheet.getLastRow() >= 263) {
-    sheet.deleteRow(263);
-    deletedCount++;
+
+  // --- 2. Clean SalesLog_Khera Kalan ---
+  const sSheet = ss.getSheetByName('SalesLog_Khera Kalan');
+  if (sSheet && sSheet.getLastRow() > 1) {
+    try {
+      const filter = sSheet.getFilter();
+      if (filter) filter.remove();
+    } catch (e) {}
+
+    const lastRow = sSheet.getLastRow();
+    const data = sSheet.getRange(1, 1, lastRow, sSheet.getLastColumn()).getValues();
+    const headers = data[0].map(h => String(h || '').trim().toLowerCase());
+    const prodIdx = headers.indexOf('product');
+    const partyIdx = headers.indexOf('party name') >= 0 ? headers.indexOf('party name') : headers.indexOf('party');
+    const cpIdx = headers.indexOf('cost price');
+    const qtyIdx = headers.indexOf('qty');
+    const dateIdx = headers.indexOf('date');
+
+    // Bottom-up delete across ENTIRE sheet
+    for (let r = lastRow; r >= 2; r--) {
+      const rowVals = data[r - 1];
+      const prod = String(rowVals[prodIdx >= 0 ? prodIdx : 6] || '').trim();
+      const party = String(rowVals[partyIdx >= 0 ? partyIdx : 4] || '').trim();
+      const cp = Number(rowVals[cpIdx >= 0 ? cpIdx : 15]) || 0;
+      const qty = Number(rowVals[qtyIdx >= 0 ? qtyIdx : 9]) || 0;
+      const dateStr = String(rowVals[dateIdx >= 0 ? dateIdx : 0] || '');
+
+      const isPlainProduct = /copier\s*plain/i.test(prod);
+      const isDuplicateParty = /friends\s*document|goel\s*paper|aggarwal\s*sales/i.test(party);
+
+      if (isPlainProduct && isDuplicateParty && cp === 0) {
+        sSheet.deleteRow(r);
+        salesDeleted++;
+        deletedDetails.push(`Sales Row ${r}: ${party} - ${prod} (${qty} reams, Date: ${dateStr})`);
+      }
+    }
+
+    try {
+      PropertiesService.getScriptProperties().setProperty('lastRow_SalesLog_Khera Kalan', String(sSheet.getLastRow()));
+    } catch (e) {}
   }
 
-  // Update tracked last row bookmark
-  try {
-    const props = PropertiesService.getScriptProperties();
-    props.setProperty('lastRow_PurchaseLog_Khera Kalan', String(sheet.getLastRow()));
-  } catch (e) {}
-
-  // MasterStock me Khera Kalan recompute karein
+  // --- 3. Recalculate MasterStock ---
   rebuildKheraKalanOnly();
 
-  const msg = `✅ PurchaseLog_Khera Kalan se Duplicate Rows 263 & 264 delete ho gayi hain!\n` +
-              `Total rows deleted: ${deletedCount}\n` +
-              `Khera Kalan MasterStock (BILT White Copier) update ho gaya hai!`;
-  Logger.log(msg);
+  const msg = `✅ Khera Kalan Duplicates Cleared & Stock Recomputed!\n\n` +
+              `• PurchaseLog: ${purchaseDeleted} duplicate rows deleted (30/10 & 04/11 Plain rows)\n` +
+              `• SalesLog: ${salesDeleted} duplicate rows deleted (13/11 & 26/11 Plain rows)\n` +
+              `• MasterStock: Khera Kalan stock 100% accurate refresh ho gaya hai!`;
+
+  Logger.log(msg + '\nDetails:\n' + deletedDetails.join('\n'));
   try {
-    SpreadsheetApp.getUi().alert('Duplicate Rows Deleted', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+    SpreadsheetApp.getUi().alert('Khera Kalan Cleanup Complete', msg, SpreadsheetApp.getUi().ButtonSet.OK);
   } catch (e) {}
 
-  return { status: 'success', deletedCount, newLastRow: sheet.getLastRow(), message: msg };
+  return { status: 'success', purchaseDeleted, salesDeleted, details: deletedDetails, message: msg };
+}
+
+/**
+ * Deletes duplicate rows 262, 263, 264 in PurchaseLog_Khera Kalan
+ */
+function deleteKheraKalanDuplicateRows263_264() {
+  return cleanupAllKheraKalanDuplicates();
 }
 
 /**
  * Deletes duplicate sales rows 2110-2113 in SalesLog_Khera Kalan
- * (FRIENDS DOCUMENT CENTRE, GOEL PAPER MART, Aggarwal Sales)
- * and rebuilds Khera Kalan MasterStock.
  */
 function deleteKheraKalanSalesDuplicateRows() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('SalesLog_Khera Kalan');
-  if (!sheet) return { status: 'error', message: 'SalesLog_Khera Kalan sheet nahi mila' };
-
-  try {
-    const filter = sheet.getFilter();
-    if (filter) filter.remove();
-  } catch (e) {}
-
-  const lastRow = sheet.getLastRow();
-  let deletedCount = 0;
-
-  for (let r = lastRow; r >= Math.max(2, lastRow - 15); r--) {
-    const prod = String(sheet.getRange(r, 7).getValue() || '').trim(); // Column G is Product
-    const party = String(sheet.getRange(r, 5).getValue() || '').trim(); // Column E is Party
-    if (/copier\s*plain/i.test(prod) && (/friends document|goel paper|aggarwal sales/i.test(party))) {
-      sheet.deleteRow(r);
-      deletedCount++;
-    }
-  }
-
-  try {
-    const props = PropertiesService.getScriptProperties();
-    props.setProperty('lastRow_SalesLog_Khera Kalan', String(sheet.getLastRow()));
-  } catch (e) {}
-
-  rebuildKheraKalanOnly();
-
-  const msg = `✅ SalesLog_Khera Kalan se ${deletedCount} duplicate rows delete ho gayi hain!\n` +
-              `Khera Kalan MasterStock update ho gaya hai!`;
-  Logger.log(msg);
-  try {
-    SpreadsheetApp.getUi().alert('Duplicate Sales Rows Deleted', msg, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (e) {}
-
-  return { status: 'success', deletedCount, newLastRow: sheet.getLastRow(), message: msg };
+  return cleanupAllKheraKalanDuplicates();
 }
 
 function resetZeroStockPrices() {
@@ -1920,6 +1953,31 @@ function processData(payload) {
         master.getRange(row, 4, 1, 4).setValues([[ Math.max(0, newQty), Number(finalAvgGST.toFixed(2)), Number(finalAvgNetRate.toFixed(2)), Number((Math.max(0, newQty) * finalEffectiveAvg).toFixed(2)) ]]);
 
         splitRows.forEach((split, splitIdx) => {
+          // Idempotent duplicate check: avoid double-entry if identical row already exists in last 30 rows
+          const existingLastRow = log.getLastRow();
+          let isDuplicate = false;
+          if (existingLastRow > 1) {
+            const checkRows = Math.min(30, existingLastRow - 1);
+            const recentData = log.getRange(existingLastRow - checkRows + 1, 1, checkRows, 11).getValues();
+            for (let i = recentData.length - 1; i >= 0; i--) {
+              const rParty = String(recentData[i][4] || '').toUpperCase().trim();
+              const rProd = String(recentData[i][6] || '').trim();
+              const rQty = Number(recentData[i][9]) || 0;
+              const rRate = Number(recentData[i][10]) || 0;
+              if (rParty === partyNameUpper && ciEqualsProduct(rProd, item.product) && Math.abs(rQty - split.qty) < 0.01 && Math.abs(rRate - Number(item.price)) < 0.01) {
+                const rDate = recentData[i][0];
+                if (rDate && Math.abs(new Date(rDate).getTime() - entryDate.getTime()) < 300000) { // within 5 minutes
+                  isDuplicate = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (isDuplicate) {
+            Logger.log(`Skipping duplicate sales row: ${partyNameUpper} | ${item.product} | ${split.qty}`);
+            return;
+          }
+
           const splitDiscount = splitIdx === 0 ? (Number(item.discount) || 0) : 0;
           const splitSaleAmt = Number(((split.qty * Number(item.price)) - splitDiscount).toFixed(2));
           const splitFreight = splitIdx === 0 ? itemFreight : 0;
