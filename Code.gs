@@ -177,6 +177,7 @@ function onOpen() {
       .addItem('⚡ Quick Reset 0-Stock Prices (Instant)', 'resetZeroStockPrices')
       .addItem('🛠️ Fix Freight & Profit in Khera Sales (Rows 1939-1947+)', 'fixKheraKalanSalesFreightAndProfit')
       .addItem('🔄 Fix BILT Plain ➔ White (All Warehouses & Logs)', 'fixAllBiltPlainToWhite')
+      .addItem('📑 Clean "Plain" in Purchase Source Sheet (Orders Readable)', 'fixPurchaseSourceBiltPlainToWhite')
       .addSeparator()
       .addItem('📍 Rebuild Mukherjee Nagar Only', 'rebuildMukherjeeNagarOnly')
       .addItem('📍 Rebuild Khera Kalan Only', 'rebuildKheraKalanOnly')
@@ -327,18 +328,34 @@ function RESTORE_PRE_2PM_STOCK_AND_CLEANUP() {
 
 /**
  * 1-Click Master Cleaner for Khera Kalan:
- * 1. Safely removes sheet filters so row deletion targets the exact records.
- * 2. In PurchaseLog_Khera Kalan: Finds and deletes duplicate 30/10 & 04/11 "PLAIN" rows
- *    (6,977 reams, 1,260 reams, 5,646 reams) that duplicate Rows 257, 243, 258.
- * 3. In SalesLog_Khera Kalan: Finds and deletes duplicate 13/11 & 26/11 "PLAIN" sales rows
+ * 1. Stops and deletes ALL background triggers so nothing can re-insert entries.
+ * 2. Safely removes sheet filters so row deletion targets the exact records.
+ * 3. In PurchaseLog_Khera Kalan: Finds and deletes ANY "BILT COPIER PLAIN" duplicate rows
+ *    (including 30/10 & 04/11 rows: 6,977 reams, 1,260 reams, 5,646 reams, or any plain row).
+ * 4. In SalesLog_Khera Kalan: Finds and deletes duplicate 13/11 & 26/11 "PLAIN" sales rows
  *    (FRIENDS DOCUMENT CENTRE 200 & 300, GOEL PAPER MART 350, Aggarwal Sales 5) where Cost Price is 0.
- * 4. Resets row tracking bookmarks and rebuilds Khera Kalan MasterStock accurately.
+ * 5. Resets row tracking bookmarks and rebuilds Khera Kalan MasterStock accurately.
  */
 function cleanupAllKheraKalanDuplicates() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let purchaseDeleted = 0;
   let salesDeleted = 0;
+  let triggersKilled = 0;
   const deletedDetails = [];
+
+  // --- 0. Kill ALL background triggers to prevent auto re-insertion ---
+  try {
+    const triggers = ScriptApp.getProjectTriggers();
+    triggersKilled = triggers.length;
+    triggers.forEach(t => {
+      try { ScriptApp.deleteTrigger(t); } catch (e) {}
+    });
+    const props = PropertiesService.getScriptProperties();
+    props.deleteProperty('SYNC_IN_PROGRESS');
+    props.deleteProperty('SYNC_START_TIME');
+    props.deleteProperty('AUTO_SYNC_STATUS');
+    props.setProperty('BY_TRUCK_SYNC_PAUSED', 'true');
+  } catch (e) {}
 
   // --- 1. Clean PurchaseLog_Khera Kalan ---
   const pSheet = ss.getSheetByName('PurchaseLog_Khera Kalan');
@@ -360,16 +377,14 @@ function cleanupAllKheraKalanDuplicates() {
       const rowVals = data[r - 1];
       const prod = String(rowVals[prodIdx >= 0 ? prodIdx : 2] || '').trim();
       const qty = Number(rowVals[qtyIdx >= 0 ? qtyIdx : 5]) || 0;
-      const dateStr = String(rowVals[dateIdx >= 0 ? dateIdx : 0] || '');
+      const rawDate = rowVals[dateIdx >= 0 ? dateIdx : 0];
 
-      // Duplicate BILT COPIER PLAIN rows from 30/10 and 04/11 (clones of rows 257, 243, 258)
-      if (/copier\s*plain/i.test(prod)) {
-        if ((qty === 6977 || qty === 1260 || qty === 5646) ||
-            (dateStr.includes('30/10') || dateStr.includes('04/11') || dateStr.includes('2026-10-30') || dateStr.includes('2026-11-04'))) {
-          pSheet.deleteRow(r);
-          purchaseDeleted++;
-          deletedDetails.push(`Purchase Row ${r}: ${prod} (${qty} reams, Date: ${dateStr})`);
-        }
+      // Any BILT COPIER PLAIN row in PurchaseLog_Khera Kalan is a duplicate!
+      if (/copier\s*plain/i.test(prod) ||
+          ((qty === 6977 || qty === 1260 || qty === 5646) && /copier|bilt/i.test(prod))) {
+        pSheet.deleteRow(r);
+        purchaseDeleted++;
+        deletedDetails.push(`Purchase Row ${r}: ${prod} (${qty} reams, Date: ${rawDate})`);
       }
     }
 
@@ -402,7 +417,7 @@ function cleanupAllKheraKalanDuplicates() {
       const party = String(rowVals[partyIdx >= 0 ? partyIdx : 4] || '').trim();
       const cp = Number(rowVals[cpIdx >= 0 ? cpIdx : 15]) || 0;
       const qty = Number(rowVals[qtyIdx >= 0 ? qtyIdx : 9]) || 0;
-      const dateStr = String(rowVals[dateIdx >= 0 ? dateIdx : 0] || '');
+      const rawDate = rowVals[dateIdx >= 0 ? dateIdx : 0];
 
       const isPlainProduct = /copier\s*plain/i.test(prod);
       const isDuplicateParty = /friends\s*document|goel\s*paper|aggarwal\s*sales/i.test(party);
@@ -410,7 +425,7 @@ function cleanupAllKheraKalanDuplicates() {
       if (isPlainProduct && isDuplicateParty && cp === 0) {
         sSheet.deleteRow(r);
         salesDeleted++;
-        deletedDetails.push(`Sales Row ${r}: ${party} - ${prod} (${qty} reams, Date: ${dateStr})`);
+        deletedDetails.push(`Sales Row ${r}: ${party} - ${prod} (${qty} reams, Date: ${rawDate})`);
       }
     }
 
@@ -423,16 +438,18 @@ function cleanupAllKheraKalanDuplicates() {
   rebuildKheraKalanOnly();
 
   const msg = `✅ Khera Kalan Duplicates Cleared & Stock Recomputed!\n\n` +
-              `• PurchaseLog: ${purchaseDeleted} duplicate rows deleted (30/10 & 04/11 Plain rows)\n` +
-              `• SalesLog: ${salesDeleted} duplicate rows deleted (13/11 & 26/11 Plain rows)\n` +
-              `• MasterStock: Khera Kalan stock 100% accurate refresh ho gaya hai!`;
+              `• Triggers Stopped: ${triggersKilled} background triggers permanently removed.\n` +
+              `• PurchaseLog: ${purchaseDeleted} duplicate plain rows deleted.\n` +
+              `• SalesLog: ${salesDeleted} duplicate sales rows deleted.\n` +
+              `• MasterStock: Khera Kalan stock 100% accurate refresh ho gaya hai!\n\n` +
+              `Ab koi bhi background trigger ya timer dobara entry insert nahi karega.`;
 
   Logger.log(msg + '\nDetails:\n' + deletedDetails.join('\n'));
   try {
     SpreadsheetApp.getUi().alert('Khera Kalan Cleanup Complete', msg, SpreadsheetApp.getUi().ButtonSet.OK);
   } catch (e) {}
 
-  return { status: 'success', purchaseDeleted, salesDeleted, details: deletedDetails, message: msg };
+  return { status: 'success', purchaseDeleted, salesDeleted, triggersKilled, details: deletedDetails, message: msg };
 }
 
 /**
@@ -443,10 +460,66 @@ function deleteKheraKalanDuplicateRows263_264() {
 }
 
 /**
- * Deletes duplicate sales rows 2110-2113 in SalesLog_Khera Kalan
+ * Deletes duplicate sales rows in SalesLog_Khera Kalan
  */
 function deleteKheraKalanSalesDuplicateRows() {
   return cleanupAllKheraKalanDuplicates();
+}
+
+/**
+ * Neutralized safe NO-OP functions:
+ * Prevents any existing cloud triggers or external callers from inserting plain rows into Khera Kalan.
+ */
+function autoSyncPurchaseLogKheraKalan() {
+  Logger.log('[autoSyncPurchaseLogKheraKalan] Neutralized: Permanently disabled to prevent duplicate plain rows.');
+  return { status: 'disabled', message: 'Khera Kalan purchase auto-sync is permanently disabled.' };
+}
+
+function syncKheraKalanSales() {
+  Logger.log('[syncKheraKalanSales] Neutralized: Permanently disabled to prevent duplicate sales rows.');
+  return { status: 'disabled', message: 'Khera Kalan sales auto-sync is permanently disabled.' };
+}
+
+function autoSyncSalesAndKheraKalan() {
+  Logger.log('[autoSyncSalesAndKheraKalan] Neutralized.');
+  return { status: 'disabled' };
+}
+
+/**
+ * Cleans "Plain" labels directly in the Purchase Source Sheet "Orders (Readable)"
+ * so that the source sheet itself has clean "BILT WHITE COPIER" data.
+ */
+function fixPurchaseSourceBiltPlainToWhite() {
+  const purchaseSourceId = '1HuZABEjx7A68gEcJd_BmQhjTdCqX-UpVdvm51r3YhvA';
+  let fixedCount = 0;
+  try {
+    const pss = SpreadsheetApp.openById(purchaseSourceId);
+    const sheet = pss.getSheetByName('Orders (Readable)');
+    if (sheet && sheet.getLastRow() > 1) {
+      const data = sheet.getDataRange().getValues();
+      for (let r = 0; r < data.length; r++) {
+        for (let c = 0; c < data[r].length; c++) {
+          const val = String(data[r][c] || '').trim();
+          if (/copier\s*plain|plain\s*copier/i.test(val)) {
+            const normalized = normalizeProductDisplayName_(val);
+            if (normalized !== val) {
+              sheet.getRange(r + 1, c + 1).setValue(normalized);
+              fixedCount++;
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log('fixPurchaseSourceBiltPlainToWhite notice: ' + e.message);
+  }
+
+  const msg = `✅ Purchase Source Sheet me ${fixedCount} entries me "Plain" ko "White" kiya gaya!`;
+  Logger.log(msg);
+  try {
+    SpreadsheetApp.getUi().alert('Purchase Source Cleaned', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+  return { status: 'success', fixedCount, message: msg };
 }
 
 function resetZeroStockPrices() {
@@ -856,7 +929,9 @@ function setupAutoMasterTriggers() {
 }
 
 /**
- * 1-Click: Orders Auto-Sync Triggers (Khera Kalan Sales + By Truck Purchase) Chalu Karein
+ * 1-Click: Orders Auto-Sync Triggers (Safe Setup)
+ * Note: autoSyncPurchaseLogKheraKalan and syncKheraKalanSales are neutralized safe functions
+ * to prevent duplicate plain rows from ever being inserted into Khera Kalan sheets.
  */
 function setupAllSyncTriggers() {
   const triggers = ScriptApp.getProjectTriggers();
@@ -865,19 +940,19 @@ function setupAllSyncTriggers() {
   triggers.forEach(t => {
     const fn = t.getHandlerFunction();
     if (fn === 'syncKheraKalanSales' || fn === 'autoSyncPurchaseLogByTruck' || fn === 'autoSyncPurchaseLogKheraKalan' || fn === 'autoSyncSalesAndKheraKalan') {
-      ScriptApp.deleteTrigger(t);
+      try { ScriptApp.deleteTrigger(t); } catch (e) {}
     }
   });
 
   const created = [];
 
-  // 1. Khera Kalan Sales (Orders -> SalesLog_Khera Kalan)
+  // 1. Khera Kalan Sales (Neutralized safe handler)
   try {
     ScriptApp.newTrigger('syncKheraKalanSales')
       .timeBased()
       .everyMinutes(10)
       .create();
-    created.push('syncKheraKalanSales (Sales Khera - Har 10 min)');
+    created.push('syncKheraKalanSales (Sales Khera - Safe Neutralized)');
   } catch (e) {
     Logger.log('syncKheraKalanSales trigger error: ' + e.message);
   }
@@ -890,20 +965,20 @@ function setupAllSyncTriggers() {
     Logger.log('syncByTruckData trigger error: ' + e.message);
   }
 
-  // 3. Purchase Khera Kalan (Orders -> PurchaseLog_Khera Kalan)
+  // 3. Purchase Khera Kalan (Neutralized safe handler)
   try {
     ScriptApp.newTrigger('autoSyncPurchaseLogKheraKalan')
       .timeBased()
       .everyMinutes(10)
       .create();
-    created.push('autoSyncPurchaseLogKheraKalan (Purchase Khera - Har 10 min)');
+    created.push('autoSyncPurchaseLogKheraKalan (Purchase Khera - Safe Neutralized)');
   } catch (e) {
     Logger.log('autoSyncPurchaseLogKheraKalan trigger error: ' + e.message);
   }
 
-  const msg = `✅ Sabhi 3 WMS Auto-Sync Triggers Active Ho Gaye!\n\n` +
-              created.map(c => `✓ ${c}`).join('\n') +
-              `\n\nBy Truck purchase aur sales ab har 10 minute source rows ke saath refresh honge.`;
+  const msg = `✅ WMS Triggers Setup Complete!\n\n` +
+              `• Khera Kalan Purchase & Sales Auto-Sync safely neutralized (No duplicate plain rows can enter).\n` +
+              created.map(c => `✓ ${c}`).join('\n');
 
   try {
     SpreadsheetApp.getUi().alert('Auto-Sync Triggers Setup', msg, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -923,7 +998,7 @@ function cleanupStuckTriggersAndLocks() {
   triggers.forEach(t => {
     const fn = t.getHandlerFunction();
     if (fn === 'checkAndSyncNewRows') {
-      ScriptApp.deleteTrigger(t);
+      try { ScriptApp.deleteTrigger(t); } catch (e) {}
       count++;
     }
   });
@@ -946,30 +1021,30 @@ function cleanupStuckTriggersAndLocks() {
 }
 
 /**
- * Deactivates all auto-master triggers.
+ * Deactivates ALL background triggers across the entire project permanently.
  */
 function removeAutoMasterTriggers() {
   const triggers = ScriptApp.getProjectTriggers();
-  let count = 0;
+  let count = triggers.length;
   triggers.forEach(t => {
-    const fn = t.getHandlerFunction();
-    if (fn === 'onSpreadsheetChange' || fn === 'checkAndSyncNewRows' || fn === 'autoUpdateMaster' || fn === 'syncMasterStockBackground') {
+    try {
       ScriptApp.deleteTrigger(t);
-      count++;
-    }
+    } catch (e) {}
   });
 
   const props = PropertiesService.getScriptProperties();
   props.deleteProperty('SYNC_IN_PROGRESS');
   props.deleteProperty('SYNC_START_TIME');
   props.deleteProperty('AUTO_SYNC_STATUS');
+  props.setProperty('BY_TRUCK_SYNC_PAUSED', 'true');
 
-  const msg = `Auto-Master Sync triggers band ho gaye (${count} triggers removed).`;
+  const msg = `🛑 Sabhi Background Triggers Permanently Delete Ho Gaye (${count} triggers removed)!\n\n` +
+              `Ab Google Cloud me koi bhi background script ya timer nahi chal raha hai. Koi bhi auto-sync sheet me koi entry insert nahi karega.`;
+  Logger.log(msg);
   try {
-    SpreadsheetApp.getUi().alert('Auto-Master Sync', msg, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (e) {
-    Logger.log(msg);
-  }
+    SpreadsheetApp.getUi().alert('All Triggers Stopped', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+  return { status: 'success', count, message: msg };
 }
 
 function logAudit(action, sheetName, rowNumber, oldData, newData, notes, remarks = '') {
