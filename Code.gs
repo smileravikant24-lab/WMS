@@ -77,6 +77,9 @@ function doGet(e) {
       case 'fixAllBiltPlainToWhite':
         return jsonOutput(fixAllBiltPlainToWhite());
 
+      case 'backfillNonGst':
+        return jsonOutput(backfillMissingNonGstPrices());
+
       case 'syncMaster':
       case 'autoUpdateMaster':
         return jsonOutput(checkAndSyncNewRows(p.forceAll === 'true'));
@@ -175,6 +178,7 @@ function onOpen() {
       .addSeparator()
       .addItem('✅ Health Check (Master vs Logs)', 'showHealthCheck')
       .addItem('⚡ Quick Reset 0-Stock Prices (Instant)', 'resetZeroStockPrices')
+      .addItem('⚡ Backfill Missing Non-GST Prices from Purchase Logs', 'backfillMissingNonGstPrices')
       .addItem('🛠️ Fix Freight & Profit in Khera Sales (Rows 1939-1947+)', 'fixKheraKalanSalesFreightAndProfit')
       .addItem('🔄 Fix BILT Plain ➔ White (All Warehouses & Logs)', 'fixAllBiltPlainToWhite')
       .addItem('📑 Clean "Plain" in Purchase Source Sheet (Orders Readable)', 'fixPurchaseSourceBiltPlainToWhite')
@@ -548,6 +552,142 @@ function resetZeroStockPrices() {
     master.getRange(1, 1, data.length, data[0].length).setValues(data);
   }
   ss.toast(`✅ ${count} products (0 stock) ke Qty aur Value 0 reset ho gaye (GST & Non-GST Prices preserved)!`, 'Zero Stock Reset', 5);
+}
+
+/**
+ * Looks up the latest purchase price for a mill + product in a warehouse log.
+ * Scans newest to oldest. Returns { lastNonGst, lastAny }.
+ */
+function getLastPurchasePriceForProduct(ss, mill, product, warehouse) {
+  if (!ss) return { lastNonGst: 0, lastAny: 0 };
+  const pSheet = ss.getSheetByName(`PurchaseLog_${warehouse}`);
+  let lastNonGst = 0;
+  let lastAny = 0;
+
+  if (pSheet && pSheet.getLastRow() > 1) {
+    const data = pSheet.getDataRange().getValues();
+    const headers = data[0].map(h => String(h || '').trim().toLowerCase());
+    const mi = headers.indexOf('mills') !== -1 ? headers.indexOf('mills') : headers.indexOf('mill');
+    const pi = headers.indexOf('product');
+    let ri = headers.indexOf('net buy ream');
+    if (ri === -1) ri = headers.indexOf('price');
+    const ti = headers.indexOf('bill type') !== -1 ? headers.indexOf('bill type') : headers.indexOf('type');
+
+    // Scan newest to oldest
+    for (let r = data.length - 1; r >= 1; r--) {
+      const rMill = mi >= 0 ? data[r][mi] : '';
+      const rProd = pi >= 0 ? data[r][pi] : '';
+      if (!ciEquals(rMill, mill) || !ciEqualsProduct(rProd, product)) continue;
+
+      const price = ri >= 0 ? (Number(data[r][ri]) || 0) : 0;
+      if (price <= 0) continue;
+
+      if (lastAny === 0) lastAny = price;
+
+      const bType = ti >= 0 ? String(data[r][ti] || '').toUpperCase().replace(/[-\s]/g, '') : '';
+      if (bType.includes('NON') && lastNonGst === 0) {
+        lastNonGst = price;
+      }
+
+      if (lastNonGst > 0 && lastAny > 0) break;
+    }
+  }
+
+  // If no direct purchase found in this warehouse, check TransferLog and Khera Kalan
+  if (lastAny === 0 && warehouse !== 'Khera Kalan') {
+    const tLog = ss.getSheetByName('TransferLog');
+    if (tLog && tLog.getLastRow() > 1) {
+      const td = tLog.getDataRange().getValues();
+      const th = td[0].map(h => String(h || '').trim().toLowerCase());
+      const tmi = th.indexOf('mill') !== -1 ? th.indexOf('mill') : th.indexOf('mills');
+      const tpi = th.indexOf('product');
+      const tti = th.indexOf('to') !== -1 ? th.indexOf('to') : th.indexOf('to warehouse');
+      let tri = th.indexOf('rate') !== -1 ? th.indexOf('rate') : th.indexOf('avg price');
+      for (let r = td.length - 1; r >= 1; r--) {
+        if (!ciEquals(td[r][tmi], mill) || !ciEqualsProduct(td[r][tpi], product)) continue;
+        if (!ciEquals(td[r][tti], warehouse)) continue;
+        const tPrice = tri >= 0 ? (Number(td[r][tri]) || 0) : 0;
+        if (tPrice > 0) {
+          lastAny = tPrice;
+          break;
+        }
+      }
+    }
+
+    if (lastAny === 0) {
+      const kheraPrices = getLastPurchasePriceForProduct(ss, mill, product, 'Khera Kalan');
+      if (lastNonGst === 0) lastNonGst = kheraPrices.lastNonGst;
+      if (lastAny === 0) lastAny = kheraPrices.lastAny;
+    }
+  }
+
+  return { lastNonGst, lastAny };
+}
+
+/**
+ * Scans MasterStock and backfills missing Non-GST prices from Purchase logs warehouse-wise.
+ * Also preserves GST prices and updates any 0 or blank rates.
+ */
+function backfillMissingNonGstPrices() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const master = ss.getSheetByName('MasterStock');
+  if (!master || master.getLastRow() <= 1) return { status: 'error', message: 'MasterStock empty' };
+
+  const data = master.getDataRange().getValues();
+  let updatedCount = 0;
+  const details = [];
+
+  for (let r = 1; r < data.length; r++) {
+    const mill = String(data[r][0] || '').trim();
+    const prod = String(data[r][1] || '').trim();
+    const wh = String(data[r][2] || '').trim();
+    let currentAvgGST = Number(data[r][4]) || 0;
+    let currentAvgNonGST = Number(data[r][5]) || 0;
+
+    if (currentAvgNonGST <= 0 || currentAvgGST <= 0) {
+      const prices = getLastPurchasePriceForProduct(ss, mill, prod, wh);
+      let changed = false;
+
+      if (currentAvgNonGST <= 0) {
+        const fillPrice = prices.lastNonGst || prices.lastAny || currentAvgGST || 0;
+        if (fillPrice > 0) {
+          data[r][5] = Number(fillPrice.toFixed(2));
+          currentAvgNonGST = data[r][5];
+          changed = true;
+        }
+      }
+
+      if (currentAvgGST <= 0) {
+        const fillGst = prices.lastAny || prices.lastNonGst || currentAvgNonGST || 0;
+        if (fillGst > 0) {
+          data[r][4] = Number(fillGst.toFixed(2));
+          currentAvgGST = data[r][4];
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        updatedCount++;
+        details.push(`${prod} (${wh}): Non-GST=${data[r][5]}, GST=${data[r][4]}`);
+      }
+    }
+  }
+
+  if (updatedCount > 0) {
+    master.getRange(1, 1, data.length, data[0].length).setValues(data);
+  }
+
+  const msg = `✅ MasterStock Non-GST Prices Backfill Complete!\n\n` +
+              `• Kul ${updatedCount} products me Non-GST / GST purchase rate fill kiya gaya.\n` +
+              `• Stock 0 hone par bhi yeh rate freeze rahega jab tak naya stock / rate na aaye.\n` +
+              `• Naya stock aane par naya Non-GST price auto-override ho jayega.`;
+
+  Logger.log(msg + '\nDetails:\n' + details.slice(0, 30).join('\n'));
+  try {
+    SpreadsheetApp.getUi().alert('Non-GST Prices Backfilled', msg, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+
+  return { status: 'success', updatedCount, details, message: msg };
 }
 
 function showHealthCheck() {
@@ -1637,6 +1777,19 @@ function _processAndWriteToMaster(master, mill, product, warehouse, events, last
     avgNetRate = Number(avgNetRate.toFixed(2));
   }
 
+  // Fallback: If Non-GST price or GST price is still 0, lookup last purchase price in warehouse log
+  if (avgNetRate <= 0 || avgGST <= 0) {
+    const logPrices = getLastPurchasePriceForProduct(master.getParent(), mill, product, warehouse);
+    if (avgNetRate <= 0) {
+      avgNetRate = logPrices.lastNonGst || existingAvgNetRate || logPrices.lastAny || avgGST || lastGstRate || rateSetGST || 0;
+      avgNetRate = Number(avgNetRate.toFixed(2));
+    }
+    if (avgGST <= 0) {
+      avgGST = existingAvgGST || logPrices.lastAny || avgNetRate || 0;
+      avgGST = Number(avgGST.toFixed(2));
+    }
+  }
+
   const effectiveAvg = avgGST > 0 ? avgGST : avgNetRate;
   // Total Value is always 0.00 when finalQty is <= 0
   const totalVal = finalQty <= 0 ? 0 : Number((finalQty * effectiveAvg).toFixed(2));
@@ -1939,10 +2092,17 @@ function processData(payload) {
 
         const bType = String(item.billType || '').toUpperCase().replace(/[-\s]/g, '');
         if (bType.includes('NON')) {
-          const masterNonGst = Number(vals[2]) || 0;
+          let masterNonGst = Number(vals[2]) || 0;
           const passedCP = Number(item.costPrice) || 0;
           if (masterNonGst <= 0 && passedCP <= 0) {
-            throw new Error(`Net Cost Price missing: "${item.product}" ka Net Cost Price MasterStock me nahi hai!`);
+            // Safety fallback: fetch last purchase rate from warehouse purchase log
+            const logPrices = getLastPurchasePriceForProduct(ss, item.mill, item.product, data.warehouse);
+            if (logPrices.lastNonGst > 0 || logPrices.lastAny > 0) {
+              masterNonGst = logPrices.lastNonGst || logPrices.lastAny;
+              vals[2] = masterNonGst;
+            } else {
+              throw new Error(`Net Cost Price missing: "${item.product}" ka Net Cost Price MasterStock me nahi hai!`);
+            }
           }
         }
 
@@ -2458,8 +2618,8 @@ function getDashboardData() {
   for (let i = 1; i < data.length; i++) {
     grandTotal += Number(data[i][6]) || 0;
     const qty = Number(data[i][3]) || 0;
-    const avgGST = qty <= 0.001 ? 0 : (Number(data[i][4]) || 0);
-    const avgNetRate = qty <= 0.001 ? 0 : (Number(data[i][5]) || 0);
+    const avgGST = Number(data[i][4]) || 0;
+    const avgNetRate = Number(data[i][5]) || 0;
     items.push({ mill: data[i][0], product: data[i][1], warehouse: data[i][2], qty: qty, avgGST: avgGST, avgNetRate: avgNetRate, totalVal: data[i][6], unit: data[i][7] });
   }
   return JSON.stringify({ items, totalValue: grandTotal });
